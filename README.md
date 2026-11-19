@@ -21,3 +21,10 @@ Rebuild: `python pipeline/fetch.py && python pipeline/fetch_extra.py && python p
 7. favicon 404 removed.
 8. Who gains: share of the supplier's current US exports, with a rank toggle.
 Browser check: `python tests/browser_check.py http://localhost:8765/index.html` (serve `site/` first).
+
+## Stage 2: AI scenario reader and analyst (18 Nov 2026)
+- `site/js/ai.js`: one provider interface with three routes: the claude.ai artifact "sample" capability (no key, used on the published page), an HTTP proxy (`worker/`), or off (rule-based reader only).
+- The AI never produces a number: the analyst calls engine tools (`run_scenario`, `country_detail`, `compare_scenarios`, `find_codes`, `current_rate`), and `checkNumbers()` blocks any answer containing a figure the engine did not return (one retry, then withheld). AI-parsed rates must come from the user's text or from `current_rate`.
+- Spend: 20 AI calls per browser per hour; the Worker adds per-IP and global rate limits; set a monthly limit on the API key.
+- `worker/`: Cloudflare Worker proxy (Anthropic or any OpenAI-compatible endpoint, chosen in `callUpstream`). Not deployed; see `worker/DEPLOY.md`.
+- Tests: `node tests/test_ai.js` (number check, tools, analyst loop with a scripted fake model, AI-parser validation), `node worker/test.mjs`, `python tests/browser_ai.py http://localhost:8766/index.html`, `node tests/cost_estimate.js`.

@@ -1,0 +1,14 @@
+[
+ {"text": "US puts 10% on India and 25% on autos from everyone", "expect": [{"targets": ["IND"], "products": "ALL", "rate": 10}, {"targets": "ALL", "products": ["87"], "rate": 25}]},
+ {"text": "60% on China", "expect": [{"targets": ["CHN"], "products": "ALL", "rate": 60}]},
+ {"text": "25% on Vietnam electronics", "expect": [{"targets": ["VNM"], "products": ["85"], "rate": 25}]},
+ {"text": "50% on steel and aluminum from all countries except the UK", "expect": [{"targets": "ALL", "products": ["72", "73", "76"], "rate": 50, "exclude_targets": ["GBR"]}]},
+ {"text": "Mexico and Canada at 25%", "expect": [{"targets": ["MEX", "CAN"], "products": "ALL", "rate": 25}]},
+ {"text": "US removes tariffs on Canada", "expect": [{"targets": ["CAN"], "products": "ALL", "rate": 0}]},
+ {"text": "15% on pharmaceuticals from Ireland and Switzerland", "expect": [{"targets": ["IRL", "CHE"], "products": ["30"], "rate": 15}]},
+ {"text": "what if America slaps 35 percent on Japanese and Korean cars", "expect": [{"targets": ["JPN", "KOR"], "products": ["87"], "rate": 35}]},
+ {"text": "20% on smartphones from China and India", "expect": [{"targets": ["CHN", "IND"], "products": ["85"], "rate": 20}]},
+ {"text": "a 12.5% tariff on Brazilian coffee", "expect": [{"targets": ["BRA"], "products": ["09"], "rate": 12.5}]},
+ {"text": "10% on Thailand, 20% on Malaysia furniture", "expect": [{"targets": ["THA"], "products": "ALL", "rate": 10}, {"targets": ["MYS"], "products": ["94"], "rate": 20}]},
+ {"text": "25% on Chinese EVs and India retaliates with 10% on almonds", "expect": [{"targets": ["CHN"], "products": ["87"], "rate": 25}]}
+]

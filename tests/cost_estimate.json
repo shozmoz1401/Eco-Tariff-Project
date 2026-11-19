@@ -1,0 +1,29 @@
+{
+ "tokens": {
+  "parser_in": 985,
+  "parser_out": 150,
+  "analyst_in": 10527,
+  "analyst_out": 370,
+  "run_scenario_result": 1707
+ },
+ "per_call": {
+  "Haiku 5.5": {
+   "parse": 0.00017,
+   "question": 0.00124
+  },
+  "Sonnet 5.5": {
+   "parse": 0.00347,
+   "question": 0.02475
+  }
+ },
+ "monthly": {
+  "light: 300 parses + 100 questions": {
+   "Haiku 5.5": 0.18,
+   "Sonnet 5.5": 3.52
+  },
+  "busy: 3,000 parses + 1,000 questions": {
+   "Haiku 5.5": 1.76,
+   "Sonnet 5.5": 35.16
+  }
+ }
+}

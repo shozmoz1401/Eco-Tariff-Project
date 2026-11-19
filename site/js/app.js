@@ -1,7 +1,7 @@
 // Tariff Exposure Simulator — UI. All numbers come from TES_ENGINE.compute().
 (function () {
   "use strict";
-  var E = window.TES_ENGINE, P = window.TES_PARSER;
+  var E = window.TES_ENGINE, P = window.TES_PARSER, AI = window.TES_AI;
   var S = { year: null, data: {}, gdp: null, meta: null, current: null, world: null, worked: null,
             lines: [], mode: "replace", elasticity: 0.76, selected: null, result: null, notes: [], gainSort: "total" };
 
@@ -73,7 +73,8 @@
       })
       .then(function () {
         setupControls();
-        runText(EXAMPLES[0]);
+        setupAI();
+        runRuleText(EXAMPLES[0]);
         $("nl").value = EXAMPLES[0];
         route();
         window.addEventListener("hashchange", route);
@@ -114,8 +115,14 @@
   }
 
   function runText(t) {
+    if (S.ai.provider && $("ai-parse").checked) return runAIText(t);
+    return runRuleText(t);
+  }
+
+  function runRuleText(t, prefix) {
     var r = P.parse(t, D().names);
     var box = $("parse-msgs"); box.innerHTML = "";
+    (prefix || []).forEach(function (w) { box.appendChild(el("div", { "class": "msg warn" }, escH(w))); });
     if (r.lines.length) S.lines = r.lines.map(function (l) { return { targets: l.targets, products: l.products, rate: l.rate, exclude_targets: l.exclude_targets, exclude_products: l.exclude_products }; });
     r.warnings.forEach(function (w) { box.appendChild(el("div", { "class": "msg warn" }, escH(w))); });
     r.notes.forEach(function (w) { box.appendChild(el("div", { "class": "msg" }, escH(w))); });
@@ -440,6 +447,78 @@
     $("lost").innerHTML = h; bindBarTips($("lost"));
   }
 
+  // ---------- AI (stage 2) ----------
+  function aiCtx() {
+    return { data: function (y) { return S.data[y]; }, gdp: function (y) { return S.gdp[String(y)]; }, current: S.current,
+             years: S.meta.years, defaultYear: S.year, name: name, chName: chName, elasticity: function () { return S.elasticity; } };
+  }
+  var CHAT_EXAMPLES = ["Who is most exposed in this scenario, and why?", "Why does Vietnam gain more than Thailand?",
+                       "Compare this scenario with 25% on China only.", "What does China pay today, and what changes?"];
+  function setupAI() {
+    var cfg = window.TES_CONFIG || {};
+    S.ai = { provider: null, history: [], gate: AI.rateGate(cfg.aiCallsPerHour || 20, 3600e3, (function () { try { return window.localStorage; } catch (e) { return null; } })() || { getItem: function () { return null; }, setItem: function () {} }) };
+    var ex = $("chat-examples");
+    CHAT_EXAMPLES.forEach(function (q) { var b = el("button", { type: "button", "class": "chip", disabled: "" }, escH(q)); b.onclick = function () { $("chat-in").value = q; ask(q); }; ex.appendChild(b); });
+    $("chat-form").addEventListener("submit", function (e) { e.preventDefault(); var q = $("chat-in").value.trim(); if (q) ask(q); });
+    AI.detect({ endpoint: cfg.aiEndpoint }).then(function (prov) {
+      S.ai.provider = prov;
+      if (!prov) {
+        $("ai-status").textContent = "AI is off here. The rule-based reader and all figures still work.";
+        $("chat-status").textContent = "AI off";
+        $("chat-log").innerHTML = '<div class="bubble ai">The AI analyst is not available on this copy of the page. Open the page on claude.ai, or deploy the proxy described on How it works.</div>';
+        return;
+      }
+      $("ai-parse").disabled = false; $("ai-parse").checked = true;
+      $("ai-status").textContent = "AI: " + prov.label + ". The first use asks your permission. Limit " + (cfg.aiCallsPerHour || 20) + " AI calls an hour.";
+      $("chat-status").textContent = prov.label;
+      $("chat-in").disabled = false; $("chat-send").disabled = false;
+      ex.querySelectorAll("button").forEach(function (b) { b.removeAttribute("disabled"); });
+    });
+  }
+  function gate() { var g = S.ai.gate.take(); if (!g.ok) throw { code: "local_limit", message: "AI limit reached for this browser. Try again in about " + g.retryInMin + " min. The rule-based tools still work." }; }
+  function aiError(e) {
+    if (e && e.code === "not_granted") { S.ai.provider = null; $("ai-parse").checked = false; $("ai-parse").disabled = true; return "AI permission was not granted, so AI is off. Everything else still works."; }
+    if (e && e.code === "rate_limited") return "The AI service is rate-limited right now. Wait a minute and try again.";
+    return (e && e.message) || "The AI call failed.";
+  }
+  function runAIText(t) {
+    var box = $("parse-msgs"); box.innerHTML = '<div class="msg">Reading the scenario with AI…</div>';
+    try { gate(); } catch (e) { return runRuleText(t, [e.message + " Used the rule-based reader instead."]); }
+    AI.aiParse(S.ai.provider, aiCtx(), t).then(function (r) {
+      if (!r.lines.length) throw new Error("AI found no lines it could use");
+      S.lines = r.lines;
+      box.innerHTML = "";
+      box.appendChild(el("div", { "class": "msg" }, '<span class="badge">AI</span>Parsed into ' + r.lines.length + " line" + (r.lines.length > 1 ? "s" : "") + " below. Check them and edit if needed."));
+      r.unsupported.concat(r.warnings).forEach(function (w) { box.appendChild(el("div", { "class": "msg warn" }, escH(w))); });
+      r.notes.forEach(function (w) { box.appendChild(el("div", { "class": "msg" }, escH(w))); });
+      renderLines(); update();
+    }).catch(function (e) { runRuleText(t, [aiError(e) + " Used the rule-based reader instead."]); });
+  }
+  function bubble(cls, html) { var b = el("div", { "class": "bubble " + cls }, html); $("chat-log").appendChild(b); b.scrollIntoView({ block: "nearest" }); return b; }
+  function toolDetails(log) {
+    if (!log || !log.length) return "";
+    return "<details><summary>Engine calls (" + log.length + "): " + log.map(function (l) { return escH(l.name); }).join(", ") + "</summary>" +
+      log.map(function (l) { return "<pre>" + escH(l.name + " " + JSON.stringify(l.input) + "\n→ " + JSON.stringify(l.output).slice(0, 2500)) + "</pre>"; }).join("") + "</details>";
+  }
+  function ask(q) {
+    if (!S.ai.provider || S.ai.busy) return;
+    $("chat-in").value = "";
+    bubble("user", escH(q));
+    try { gate(); } catch (e) { bubble("blocked", escH(e.message)); return; }
+    S.ai.busy = true; $("chat-send").disabled = true;
+    var wait = bubble("ai", "Running the engine…");
+    AI.analyst(S.ai.provider, aiCtx(), q, S.ai.history.slice(-6), scenarioLines(), S.mode).then(function (r) {
+      wait.remove();
+      if (r.ok) {
+        bubble("ai", escH(r.text) + toolDetails(r.toolLog));
+        S.ai.history.push({ role: "user", content: q }, { role: "assistant", content: r.text });
+      } else {
+        bubble("blocked", "<b>Answer withheld.</b> It contained numbers the engine did not return (" + escH(r.bad.join(", ")) + "), even after one retry. The engine results it used are below." + toolDetails(r.toolLog));
+      }
+    }).catch(function (e) { wait.remove(); bubble("blocked", escH(aiError(e))); })
+      .then(function () { S.ai.busy = false; $("chat-send").disabled = !S.ai.provider; });
+  }
+
   // ---------- how it works ----------
   function calibTxt(k, add) { if (!S.calib || S.calib[k] === undefined) return "–"; return pct(S.calib[k] + (add || 0), 1); }
   function renderHow() {
@@ -494,10 +573,31 @@
       "<li>Every row in the tariff table says how it was verified. Rows marked UNVERIFIED (UK vehicle quota rate, Mexico/Canada vehicle coverage) rest on secondary sources only.</li>",
       "<li><b>Not modelled:</b><ul>" + cur.not_modelled.map(function (n) { return "<li>" + escH(n[0]) + " — " + escH(n[1]) + "</li>"; }).join("") + "</ul></li>",
       "<li>" + escH(cur.checked) + "</li></ul>",
-      "<h3>Coming next</h3><p>Stage 2: an AI scenario parser and a chat analyst that runs this engine (the AI never produces a number the engine did not return). Stage 3: any of the 40 largest economies as imposer, so retaliation can be modelled. Stage 4: past tariff episodes and stock-market moves, labelled as history. Stage 5: monthly auto-update.</p>",
-      "<h3>Source code</h3><p>Engine spec, JavaScript and Python engines, pipeline and tests are published with this page: <a href=\"src/ENGINE_SPEC.md.txt\">spec</a> · <a href=\"js/engine.js\">engine.js</a> · <a href=\"src/engine.py.txt\">engine.py</a> · <a href=\"src/build.py.txt\">build.py</a> · <a href=\"src/test_engine.py.txt\">tests</a> · <a href=\"src/current_tariffs.py.txt\">tariff table</a>.</p>"
+      "<h3>AI features (stage 2)</h3>",
+      "<p><b>What the AI does:</b> (1) reads a typed scenario into the same editable lines the menus produce, and you see and can correct them before anything is calculated; (2) answers questions in the analyst panel by calling the engine as a tool (run a scenario, inspect a country, compare two scenarios, look up codes, read today's rates). <b>What it never does:</b> produce a number. Every figure in an analyst answer is checked against the engine's own outputs for that question. If any figure is not there, at the precision shown, the answer is retried once and otherwise withheld, and the engine results are shown instead. A parsed rate must appear in your text, or be derived from today's modelled rate (for “double”), and the page tells you when it was derived.</p>",
+      "<p><b>Where the AI runs:</b> on claude.ai, the page asks Claude through the artifact platform, with no API key and no server; the first use asks your permission, and it counts against the viewer's own Claude usage. A public copy can instead call a small Cloudflare Worker (in the repo's <code>worker/</code> folder) that holds the API key as a secret and forwards to the Anthropic API or any OpenAI-compatible endpoint. The provider sits behind one function, so swapping it changes no other code. Without either, AI is simply off and the rule-based reader is used.</p>",
+      "<p><b>Spend controls:</b> each browser is limited to " + ((window.TES_CONFIG || {}).aiCallsPerHour || 20) + " AI calls an hour, the Worker limits requests per IP address and in total, and the API key should have a monthly spending limit set in the Claude Console.</p>",
+      "<p><b>AI reader check:</b> the button below runs the 12 test phrases in <code>tests/parser_eval.json</code> through the AI reader on its cheapest tier and compares the lines with the expected answers (the rule-based reader scores 12/12 on the same set). It makes 12 AI calls. <button type=\"button\" class=\"btn\" id=\"ai-eval\">Run AI reader check</button></p><div id=\"ai-eval-out\" class=\"sub\"></div>",
+      "<h3>Coming next</h3><p>Stage 3: any of the 40 largest economies as imposer, so retaliation can be modelled. Stage 4: past tariff episodes and stock-market moves, labelled as history. Stage 5: monthly auto-update.</p>",
+      "<h3>Source code</h3><p>Engine spec, JavaScript and Python engines, pipeline and tests are published with this page: <a href=\"src/ENGINE_SPEC.md.txt\">spec</a> · <a href=\"js/engine.js\">engine.js</a> · <a href=\"src/engine.py.txt\">engine.py</a> · <a href=\"src/build.py.txt\">build.py</a> · <a href=\"src/test_engine.py.txt\">tests</a> · <a href=\"js/ai.js\">ai.js</a> · <a href=\"src/worker.js.txt\">worker</a> · <a href=\"src/current_tariffs.py.txt\">tariff table</a>.</p>"
     ].join("");
     a.dataset.done = "1";
+    var b = $("ai-eval");
+    if (b) b.onclick = function () {
+      var out = $("ai-eval-out");
+      if (!S.ai || !S.ai.provider) { out.textContent = "AI is not available on this copy of the page."; return; }
+      b.disabled = true; out.textContent = "Running…";
+      getJSON("data/parser_eval.json").then(function (ev) {
+        var norm = function (x) { return JSON.stringify((x || []).map(function (l) { return { t: l.targets === "ALL" ? "ALL" : l.targets.slice().sort(), p: l.products === "ALL" ? "ALL" : l.products.slice().sort(), r: l.rate, xt: (l.exclude_targets || []).slice().sort(), xp: (l.exclude_products || []).slice().sort() }; })); };
+        var ok = 0, rows = [];
+        return ev.reduce(function (pr, c) {
+          return pr.then(function () {
+            return AI.aiParse(S.ai.provider, aiCtx(), c.text).then(function (r) { var pass = norm(r.lines) === norm(c.expect); ok += pass; rows.push((pass ? "✓ " : "✗ ") + c.text + (pass ? "" : " → " + norm(r.lines))); },
+              function (e) { rows.push("✗ " + c.text + " → error: " + aiError(e)); });
+          }).then(function () { out.innerHTML = escH("AI reader: " + ok + "/" + rows.length + " so far") + "<br>" + rows.map(escH).join("<br>"); });
+        }, Promise.resolve()).then(function () { out.insertAdjacentHTML("afterbegin", "<b>" + (ok === ev.length ? "All passed on the cheapest tier." : ok + "/" + ev.length + " passed. Where it fails, the rule-based reader is the better default for those phrases.") + "</b><br>"); });
+      }).then(function () { b.disabled = false; });
+    };
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();

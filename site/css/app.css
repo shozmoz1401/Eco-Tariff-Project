@@ -172,3 +172,16 @@ h3 { font-size: 16px; margin: 18px 0 6px; }
 .cur-row .n.unv { color: var(--warn-ink); background: var(--warn-bg); display: inline-block; padding: 1px 6px; border-radius: 4px; margin-top: 2px; }
 #gains td:nth-child(2), #gains td:nth-child(3) { text-align: left; }
 #gains th:nth-child(2), #gains th:nth-child(3) { text-align: left; }
+.ai-row { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-top: 8px; font-size: 13px; }
+.switch { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.switch input:disabled + span { color: var(--text-muted); }
+.ai-status { color: var(--text-muted); font-size: 12.5px; }
+.chat-log { display: grid; gap: 10px; margin: 8px 0 10px; max-height: 520px; overflow-y: auto; }
+.chat-log:empty { display: none; }
+.bubble { padding: 10px 12px; border-radius: 10px; font-size: 14px; line-height: 1.5; max-width: 92%; white-space: pre-wrap; }
+.bubble.user { background: var(--surface-2); justify-self: end; }
+.bubble.ai { border: 1px solid var(--line); justify-self: start; }
+.bubble.blocked { border: 1px solid var(--up); background: var(--warn-bg); color: var(--warn-ink); }
+.bubble details { margin-top: 6px; font-size: 12px; color: var(--text-muted); white-space: normal; }
+.bubble details pre { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; background: var(--surface-2); padding: 6px; border-radius: 6px; font-size: 11.5px; }
+.badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; background: var(--surface-2); color: var(--text-secondary); margin-right: 6px; }

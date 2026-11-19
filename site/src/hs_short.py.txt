@@ -1,0 +1,23 @@
+# Short labels for HS 2-digit chapters (official text kept alongside in the site data).
+SHORT = {
+"01":"Live animals","02":"Meat","03":"Fish & seafood","04":"Dairy, eggs, honey","05":"Other animal products",
+"06":"Plants & flowers","07":"Vegetables","08":"Fruit & nuts","09":"Coffee, tea, spices","10":"Cereals",
+"11":"Milling products","12":"Oilseeds","13":"Gums & resins","14":"Plaiting materials","15":"Fats & oils",
+"16":"Prepared meat & fish","17":"Sugar","18":"Cocoa","19":"Cereal preparations","20":"Prepared vegetables & fruit",
+"21":"Misc. food preparations","22":"Beverages & spirits","23":"Animal feed","24":"Tobacco","25":"Salt, stone, cement",
+"26":"Ores","27":"Energy (oil, gas, coal)","28":"Inorganic chemicals","29":"Organic chemicals","30":"Pharmaceuticals",
+"31":"Fertilisers","32":"Dyes & paints","33":"Cosmetics & perfume","34":"Soaps & waxes","35":"Proteins & glues",
+"36":"Explosives","37":"Photographic goods","38":"Misc. chemicals","39":"Plastics","40":"Rubber",
+"41":"Hides & leather","42":"Leather goods & bags","43":"Fur","44":"Wood & lumber","45":"Cork",
+"46":"Basketware","47":"Wood pulp","48":"Paper","49":"Printed matter","50":"Silk",
+"51":"Wool","52":"Cotton","53":"Other plant fibres","54":"Man-made filaments","55":"Man-made staple fibres",
+"56":"Wadding & rope","57":"Carpets","58":"Special fabrics","59":"Coated fabrics","60":"Knitted fabrics",
+"61":"Knitted apparel","62":"Woven apparel","63":"Home textiles","64":"Footwear","65":"Headgear",
+"66":"Umbrellas","67":"Feathers & artificial flowers","68":"Stone & cement articles","69":"Ceramics","70":"Glass",
+"71":"Gold, gems, jewellery","72":"Iron & steel","73":"Steel articles","74":"Copper","75":"Nickel",
+"76":"Aluminium","78":"Lead","79":"Zinc","80":"Tin","81":"Other base metals",
+"82":"Tools & cutlery","83":"Misc. metal articles","84":"Machinery & computers","85":"Electrical & electronics","86":"Railway equipment",
+"87":"Vehicles & parts","88":"Aircraft","89":"Ships & boats","90":"Optical & medical instruments","91":"Clocks & watches",
+"92":"Musical instruments","93":"Arms & ammunition","94":"Furniture & lighting","95":"Toys & sports goods","96":"Misc. manufactures",
+"97":"Art & antiques","99":"Not classified",
+}

@@ -14,7 +14,7 @@
 <header class="top">
   <div class="wrap top-inner">
     <div>
-      <div class="eyebrow">Stage 1 · US as imposer</div>
+      <div class="eyebrow">US as imposer · AI analyst</div>
       <h1>Tariff Exposure Simulator</h1>
       <p class="lede">Type a tariff scenario. See who is exposed, calculated from real trade data. It measures exposure; it does not forecast prices or GDP.</p>
     </div>
@@ -33,6 +33,10 @@
       <input id="nl" type="text" autocomplete="off" placeholder="e.g. US puts 10% on India and 25% on autos from everyone">
       <button type="submit" class="btn primary">Run</button>
     </form>
+    <div class="ai-row" id="ai-row">
+      <label class="switch"><input type="checkbox" id="ai-parse" disabled> <span>Use AI to read the scenario</span></label>
+      <span class="ai-status" id="ai-status">Checking whether AI is available…</span>
+    </div>
     <div class="examples" id="examples"></div>
     <div id="parse-msgs" class="msgs" aria-live="polite"></div>
     <div id="cut-msgs" class="msgs" aria-live="polite"></div>
@@ -54,7 +58,7 @@
         <select id="year"></select>
       </div>
     </div>
-    <p class="fine">Overlaps: the most specific line wins (a product line beats a country-wide line). Menus work without AI; the AI parser arrives in stage 2.</p>
+    <p class="fine">Overlaps: the most specific line wins (a product line beats a country-wide line). Menus and the rule-based reader always work without AI.</p>
   </section>
 
   <section class="kpis" id="kpis" aria-label="Headline figures"></section>
@@ -101,6 +105,18 @@
       <p class="src" id="rs-src"></p>
     </section>
 
+    <section class="card span2" aria-labelledby="chat-h" id="chat-card">
+      <div class="card-head"><h2 id="chat-h">AI analyst</h2><span class="hint" id="chat-status"></span></div>
+      <p class="sub">Ask about the scenario. The analyst runs the engine as a tool and may only state numbers the engine returned; any answer that breaks that rule is blocked.</p>
+      <div id="chat-log" class="chat-log" aria-live="polite"></div>
+      <div class="examples" id="chat-examples"></div>
+      <form id="chat-form" class="nl-row">
+        <label for="chat-in" class="sr">Ask the analyst</label>
+        <input id="chat-in" type="text" autocomplete="off" placeholder="e.g. Why does Vietnam gain more than Thailand?" disabled>
+        <button type="submit" class="btn primary" id="chat-send" disabled>Ask</button>
+      </form>
+    </section>
+
     <section class="card" aria-labelledby="gain-h">
       <h2 id="gain-h">Who is best placed to pick up diverted trade</h2>
       <p class="sub">Untaxed suppliers ranked by their current share of US imports of the hit products, weighted by the value hit. A frictionless benchmark, not a forecast.</p>
@@ -141,6 +157,8 @@
 <script src="lib/topojson-client.min.js"></script>
 <script src="js/engine.js"></script>
 <script src="js/parser.js"></script>
+<script src="js/config.js"></script>
+<script src="js/ai.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
