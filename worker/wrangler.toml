@@ -27,3 +27,27 @@ namespace_id = "1002"
   [ratelimits.simple]
   limit = 60
   period = 60
+
+# Free-route test copy (HANDOFF_2 C6): `wrangler deploy --env free` -> worker "tes-ai-free".
+# Its key is a Worker secret OPENAI_COMPAT_KEY entered in Cloudflare's dashboard (Google AI Studio key).
+[env.free]
+name = "tes-ai-free"
+[env.free.vars]
+PROVIDER = "openai"
+OPENAI_COMPAT_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+OPENAI_COMPAT_MODEL = "gemini-3.8-flash"
+MODEL_QUICK = "gemini-3.8-flash"
+MODEL_DEFAULT = "gemini-3.8-flash"
+ALLOWED_ORIGINS = "https://shozmoz1401.github.io"
+[[env.free.ratelimits]]
+name = "RL_IP"
+namespace_id = "1003"
+  [env.free.ratelimits.simple]
+  limit = 10
+  period = 60
+[[env.free.ratelimits]]
+name = "RL_GLOBAL"
+namespace_id = "1004"
+  [env.free.ratelimits.simple]
+  limit = 60
+  period = 60
