@@ -84,3 +84,21 @@ jobs:
     steps:
       - id: d
         uses: actions/deploy-pages@v4
+
+  # Deploys the AI proxy Worker (worker/) once CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are set as repo secrets.
+  # The Anthropic key is NOT here: it is a Worker secret entered in Cloudflare's dashboard.
+  worker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: has
+        env: { T: "${{ secrets.CLOUDFLARE_API_TOKEN }}" }
+        run: if [ -n "$T" ]; then echo "ok=1" >> "$GITHUB_OUTPUT"; else echo "No Cloudflare token yet; skipping Worker deploy."; fi
+      - if: steps.has.outputs.ok == '1'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker
+          command: deploy
