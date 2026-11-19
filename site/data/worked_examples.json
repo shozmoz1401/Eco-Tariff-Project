@@ -1,0 +1,35 @@
+[
+ {
+  "title": "1. Overlapping lines",
+  "scenario": "US puts 10% on India and 25% on autos from everyone (2025 data)",
+  "steps": [
+   "US imports from India: $107.59bn, of which vehicles (ch. 87) $2.49bn.",
+   "Most specific line wins, so Indian vehicles pay 25% and everything else from India pays 10%.",
+   "India's tariff bill = $105.10bn \u00d7 10% + $2.49bn \u00d7 25% = $11.13bn.",
+   "India's GDP 2025: $3,956.07bn, so exposed exports = $107.59bn \u00f7 $3,956.07bn = 2.72% of GDP.",
+   "Total exports hit = all US vehicle imports $337.95bn + India's non-vehicle exports $105.10bn = $443.05bn.",
+   "Today vs. scenario: the India line is country-wide, so it replaces today's 10% forced-labour duty but keeps Section 232 tariffs. Indian steel articles (ch. 73, $2.93bn) keep their 50% ($1.46bn) and add the scenario's 10%, giving $1.76bn."
+  ]
+ },
+ {
+  "title": "2. Today vs. scenario",
+  "scenario": "25% on vehicles from Mexico, replacing today's duties (2025 data)",
+  "steps": [
+   "US vehicle imports from Mexico: $124.20bn. Exports hit = $124.20bn; tariff bill = 25% \u00d7 that = $31.05bn.",
+   "Today USMCA vehicles pay 25% on non-US content only, modelled as 76% coverage (\u224819% effective): $124.20bn \u00d7 0.76 \u00d7 25% = $23.60bn.",
+   "Difference = $31.05bn \u2212 $23.60bn = $7.45bn.",
+   "Average rate on the flow: today 19.0%, scenario 25.0%. Price-based change = (25.0% \u2212 19.0%) \u00f7 (1 + 19.0%) = 5.04%.",
+   "Trade lost at sensitivity 0.76 = $124.20bn \u00d7 5.04% \u00d7 0.76 = $4.76bn."
+  ]
+ },
+ {
+  "title": "3. Who gains",
+  "scenario": "10% on electronics (ch. 85) from China and Vietnam (2025 data)",
+  "steps": [
+   "Value hit = China $84.03bn + Vietnam $61.92bn = $145.95bn.",
+   "All other suppliers sold the US $367.61bn of chapter 85.",
+   "Mexico sold $91.35bn, a 24.8% share of untaxed supply, so its diversion potential = $145.95bn \u00d7 24.8% = $36.27bn.",
+   "Diversion potentials across all untaxed suppliers add up to the value hit: it splits the hit trade, it does not create more."
+  ]
+ }
+]

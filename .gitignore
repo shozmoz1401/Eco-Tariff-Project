@@ -1,0 +1,6 @@
+# raw API caches are re-created by pipeline/fetch.py
+data/raw/
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store

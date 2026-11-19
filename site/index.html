@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tariff Exposure Simulator</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="viz-root">
+<header class="top">
+  <div class="wrap top-inner">
+    <div>
+      <div class="eyebrow">Stage 1 · US as imposer</div>
+      <h1>Tariff Exposure Simulator</h1>
+      <p class="lede">Type a tariff scenario. See who is exposed, calculated from real trade data. It measures exposure; it does not forecast prices or GDP.</p>
+    </div>
+    <nav class="tabs" aria-label="Views">
+      <a href="#simulator" data-view="simulator" class="tab">Simulator</a>
+      <a href="#how-it-works" data-view="how-it-works" class="tab">How it works</a>
+    </nav>
+  </div>
+</header>
+
+<main id="view-simulator" class="wrap view">
+  <section class="card scenario" aria-labelledby="scn-h">
+    <h2 id="scn-h">Scenario</h2>
+    <form id="nl-form" class="nl-row">
+      <label for="nl" class="sr">Describe a scenario</label>
+      <input id="nl" type="text" autocomplete="off" placeholder="e.g. US puts 10% on India and 25% on autos from everyone">
+      <button type="submit" class="btn primary">Run</button>
+    </form>
+    <div class="examples" id="examples"></div>
+    <div id="parse-msgs" class="msgs" aria-live="polite"></div>
+    <div id="cut-msgs" class="msgs" aria-live="polite"></div>
+    <div class="lines-head">
+      <span>Imposer</span><span>Targets</span><span>Products</span><span>Rate</span><span></span>
+    </div>
+    <div id="lines"></div>
+    <div class="scn-controls">
+      <button type="button" class="btn" id="add-line">+ Add line</button>
+      <div class="ctl">
+        <span class="ctl-label">Scenario rates</span>
+        <div class="seg" role="radiogroup" aria-label="How scenario rates combine with today's tariffs">
+          <button type="button" role="radio" data-mode="replace" aria-checked="true">Replace today's</button>
+          <button type="button" role="radio" data-mode="add" aria-checked="false">Add on top</button>
+        </div>
+      </div>
+      <div class="ctl">
+        <label class="ctl-label" for="year">Trade year</label>
+        <select id="year"></select>
+      </div>
+    </div>
+    <p class="fine">Overlaps: the most specific line wins (a product line beats a country-wide line). Menus work without AI; the AI parser arrives in stage 2.</p>
+  </section>
+
+  <section class="kpis" id="kpis" aria-label="Headline figures"></section>
+
+  <div class="grid">
+    <section class="card span2" aria-labelledby="map-h">
+      <div class="card-head">
+        <h2 id="map-h">Exposed exports as a share of each country's GDP</h2>
+        <span class="hint">Tap a country for detail</span>
+      </div>
+      <div id="map" class="map"></div>
+      <div id="map-legend" class="legend"></div>
+      <p class="src" id="map-src"></p>
+    </section>
+
+    <section class="card" aria-labelledby="cty-h">
+      <div class="card-head"><h2 id="cty-h">Country panel</h2>
+        <select id="cty-select" aria-label="Choose a country"></select></div>
+      <div id="country"></div>
+      <p class="src" id="cty-src"></p>
+    </section>
+
+    <section class="card" aria-labelledby="sec-h">
+      <h2 id="sec-h">Which sectors carry the hit</h2>
+      <div id="sectors"></div>
+      <p class="src" id="sec-src"></p>
+    </section>
+
+    <section class="card span2" aria-labelledby="rank-h">
+      <h2 id="rank-h">Most exposed countries</h2>
+      <div class="table-scroll"><table id="rank" class="tbl"></table></div>
+      <p class="src" id="rank-src"></p>
+    </section>
+
+    <section class="card span2" aria-labelledby="rs-h">
+      <div class="card-head"><h2 id="rs-h">Today's tariffs vs. the scenario</h2></div>
+      <p class="sub" id="rs-sub"></p>
+      <div id="realsim-totals" class="rs-totals"></div>
+      <div class="table-scroll"><table id="realsim" class="tbl"></table></div>
+      <details class="cur-table">
+        <summary>Tariffs in force today (hand-maintained, dated)</summary>
+        <div id="current-list"></div>
+      </details>
+      <p class="src" id="rs-src"></p>
+    </section>
+
+    <section class="card" aria-labelledby="gain-h">
+      <h2 id="gain-h">Who is best placed to pick up diverted trade</h2>
+      <p class="sub">Untaxed suppliers ranked by their current share of US imports of the hit products, weighted by the value hit. A frictionless benchmark, not a forecast.</p>
+      <div class="ctl" style="margin-bottom:8px"><span class="ctl-label">Rank by</span>
+        <div class="seg" role="radiogroup" aria-label="Rank who gains by" id="gain-sort">
+          <button type="button" role="radio" data-sort="total" aria-checked="true">Dollars</button>
+          <button type="button" role="radio" data-sort="share" aria-checked="false">Share of its US exports</button>
+        </div></div>
+      <div class="table-scroll"><table id="gains" class="tbl"></table></div>
+      <p class="src" id="gain-src"></p>
+    </section>
+
+    <section class="card" aria-labelledby="lost-h">
+      <h2 id="lost-h">Trade lost (assumption)</h2>
+      <p class="sub">Imports × tariff change ÷ (1 + today's rate) × sensitivity. The sensitivity is your assumption.</p>
+      <div class="slider-row">
+        <label for="elast">Sensitivity (trade elasticity)</label>
+        <input type="range" id="elast" min="0" max="3" step="0.01" value="0.76">
+        <output id="elast-out" for="elast">0.76</output>
+      </div>
+      <div class="presets"><button type="button" class="chip" data-e="0.76">0.76 · one year</button><button type="button" class="chip" data-e="2">2.0 · long run</button></div>
+      <div id="lost"></div>
+      <p class="src">Default from Boehm, Levchenko &amp; Pandalai-Nayar (2023), <a href="https://doi.org/10.1257/aer.20210225">AER 113(4)</a>: short-run elasticity −0.76, long run about −2, defined on the price including the tariff, so the change used is Δtariff ÷ (1 + today's rate). Linear approximation, capped at the value of the trade.</p>
+    </section>
+  </div>
+</main>
+
+<main id="view-how-it-works" class="wrap view" hidden>
+  <article class="card prose" id="how"></article>
+</main>
+
+<footer class="wrap foot">
+  <p>Built by Shorya Kukreja Belligundu · Data: UN Comtrade, World Bank, DGBAS · Tariff table from official notices (Federal Register, White House, USTR, CRS) · <span id="built"></span></p>
+</footer>
+<div id="tip" class="tip" role="tooltip" hidden></div>
+</div>
+<script src="lib/d3.min.js"></script>
+<script src="lib/topojson-client.min.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/parser.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
