@@ -9,4 +9,6 @@ On claude.ai the simulator already uses Claude through the artifact platform. Th
 5. In `site/js/config.js`, set `aiEndpoint` to `<that URL>/v1/agent`. Set `ALLOWED_ORIGINS` in `wrangler.toml` to the site's origin.
 6. Free route: set `PROVIDER = "openai"`, `OPENAI_COMPAT_URL`, `OPENAI_COMPAT_MODEL`, and the secret `OPENAI_COMPAT_KEY`. The model must support tool calling.
 
+The Worker holds its own system prompts and tool definitions in `src/spec.generated.js`, generated from `site/js/ai.js`. After changing `ai.js` or the data, run `node build_spec.cjs` (the tests fail if it is out of date). The page sends only the task, the question, the scenario, recent chat history and tool results; any other request shape is rejected, so the Worker cannot be used as a general AI proxy. A caller can still type an off-topic question; the fixed prompt tells the model to decline, and the rate limits and the key's monthly spend limit cap the cost.
+
 Test locally: `node test.mjs` (uses a fake upstream; no key needed).

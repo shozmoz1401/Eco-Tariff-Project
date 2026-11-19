@@ -5,12 +5,7 @@
   var S = { year: null, data: {}, gdp: null, meta: null, current: null, world: null, worked: null,
             lines: [], mode: "replace", elasticity: 0.76, selected: null, result: null, notes: [], gainSort: "total" };
 
-  var NICE = { "USA": "United States", "KOR": "South Korea", "VNM": "Vietnam", "TUR": "Türkiye", "HKG": "Hong Kong",
-    "RUS": "Russia", "CZE": "Czechia", "IRN": "Iran", "SYR": "Syria", "LAO": "Laos", "MDA": "Moldova", "BOL": "Bolivia",
-    "VEN": "Venezuela", "TZA": "Tanzania", "PRK": "North Korea", "COD": "DR Congo", "COG": "Congo", "MKD": "North Macedonia",
-    "BIH": "Bosnia and Herzegovina", "DOM": "Dominican Republic", "CAF": "Central African Rep.", "ARE": "UAE", "GBR": "United Kingdom",
-    "TWN": "Taiwan", "CHE": "Switzerland", "MAC": "Macao", "CIV": "Côte d'Ivoire", "FSM": "Micronesia", "KNA": "St Kitts and Nevis",
-    "VCT": "St Vincent", "LCA": "St Lucia", "SXM": "Sint Maarten", "PSE": "Palestine", "SAU": "Saudi Arabia", "BRN": "Brunei" };
+  var NICE = window.TES_NAMES || {};
   var EXAMPLES = [
     "US puts 10% on India and 25% on autos from everyone",
     "60% on China, 25% on Vietnam electronics",
@@ -415,8 +410,28 @@
     }
   }
 
+  // countries whose average rate the scenario raises / lowers vs today (0.05% of their US exports as a floor)
+  function rateMoves() {
+    var bc = S.result.byCountry, up = [], down = [];
+    Object.keys(bc).forEach(function (k) { var r = bc[k]; if (!r.imports) return; var d = (r.sim_bill - r.cur_bill) / r.imports; if (d > 0.0005) up.push(k); else if (d < -0.0005) down.push(k); });
+    return { up: up, down: down };
+  }
   function renderGains() {
-    var g = S.result.gains, box = $("gains");
+    var g = S.result.gains, box = $("gains"), note = $("gain-note"), mv = rateMoves();
+    var sortRow = document.getElementById("gain-sort").parentNode;
+    if (!mv.up.length && mv.down.length) {
+      box.innerHTML = ""; sortRow.hidden = true;
+      note.hidden = false;
+      note.innerHTML = "<b>Not shown: this scenario only lowers tariffs</b> (for " + escH(mv.down.slice(0, 4).map(name).join(", ")) + (mv.down.length > 4 ? " and " + (mv.down.length - 4) + " more" : "") +
+        "). Lower tariffs pull trade toward those countries rather than diverting it away, so a diversion ranking would point the wrong way.";
+      return;
+    }
+    sortRow.hidden = false;
+    if (mv.down.length) {
+      note.hidden = false;
+      note.innerHTML = "For " + escH(mv.down.slice(0, 4).map(name).join(", ")) + (mv.down.length > 4 ? " and " + (mv.down.length - 4) + " more" : "") +
+        " this scenario is a tariff cut, so trade would tend to move toward them. The ranking below treats every line as a new tariff; read it for the countries whose tariffs rise.";
+    } else note.hidden = true;
     var key = S.gainSort === "share" ? function (k) { return g[k].share_of_us_exports || 0; } : function (k) { return g[k].total; };
     var FLOOR = 5e7;
     var ks = Object.keys(g).filter(function (k) { return S.gainSort !== "share" || g[k].total >= FLOOR; }).sort(function (a, b) { return key(b) - key(a); }).slice(0, 12);
@@ -456,7 +471,7 @@
                        "Compare this scenario with 25% on China only.", "What does China pay today, and what changes?"];
   function setupAI() {
     var cfg = window.TES_CONFIG || {};
-    S.ai = { provider: null, history: [], gate: AI.rateGate(cfg.aiCallsPerHour || 20, 3600e3, (function () { try { return window.localStorage; } catch (e) { return null; } })() || { getItem: function () { return null; }, setItem: function () {} }) };
+    S.ai = { provider: null, history: [], logs: [], gate: AI.rateGate(cfg.aiCallsPerHour || 20, 3600e3, (function () { try { return window.localStorage; } catch (e) { return null; } })() || { getItem: function () { return null; }, setItem: function () {} }) };
     var ex = $("chat-examples");
     CHAT_EXAMPLES.forEach(function (q) { var b = el("button", { type: "button", "class": "chip", disabled: "" }, escH(q)); b.onclick = function () { $("chat-in").value = q; ask(q); }; ex.appendChild(b); });
     $("chat-form").addEventListener("submit", function (e) { e.preventDefault(); var q = $("chat-in").value.trim(); if (q) ask(q); });
@@ -497,6 +512,13 @@
   // escape first, then allow **bold** only
   function mdLite(t) { return escH(t).replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>").replace(/^#+\s*/gm, ""); }
   function bubble(cls, html) { var b = el("div", { "class": "bubble " + cls }, html); $("chat-log").appendChild(b); b.scrollIntoView({ block: "nearest" }); return b; }
+  // the engine figures the answer used, so a reader can see what each number is
+  function usedList(used) {
+    if (!used || !used.length) return "";
+    var seen = {}, items = used.filter(function (u) { if (seen[u.raw]) return false; seen[u.raw] = 1; return true; });
+    return '<div class="used"><span class="badge">Engine figures</span>' + items.map(function (u) {
+      return "<span class=\"fig\"><b>" + escH(u.raw) + "</b> " + escH(u.source.replace(/_/g, " ")) + "</span>"; }).join("") + "</div>";
+  }
   function toolDetails(log) {
     if (!log || !log.length) return "";
     return "<details><summary>Engine calls (" + log.length + "): " + log.map(function (l) { return escH(l.name); }).join(", ") + "</summary>" +
@@ -509,13 +531,15 @@
     try { gate(); } catch (e) { bubble("blocked", escH(e.message)); return; }
     S.ai.busy = true; $("chat-send").disabled = true;
     var wait = bubble("ai", "Running the engine…");
-    AI.analyst(S.ai.provider, aiCtx(), q, S.ai.history.slice(-6), scenarioLines(), S.mode).then(function (r) {
+    AI.analyst(S.ai.provider, aiCtx(), q, S.ai.history.slice(-6), scenarioLines(), S.mode, S.ai.logs.slice(-12)).then(function (r) {
       wait.remove();
       if (r.ok) {
-        bubble("ai", mdLite(r.text) + toolDetails(r.toolLog));
+        bubble("ai", mdLite(r.text) + usedList(r.used) + toolDetails(r.toolLog));
         S.ai.history.push({ role: "user", content: q }, { role: "assistant", content: r.text });
+        S.ai.logs = S.ai.logs.concat(r.toolLog);
       } else {
-        bubble("blocked", "<b>Answer withheld.</b> It contained numbers the engine did not return (" + escH(r.bad.join(", ")) + "), even after one retry. The engine results it used are below." + toolDetails(r.toolLog));
+        bubble("blocked", "<b>Answer withheld.</b> Even after one retry it contained figures that failed the check: " +
+          escH(r.problems.map(function (p) { return p.raw + " (" + p.reason + ")"; }).join("; ")) + ". The engine results it used are below." + toolDetails(r.toolLog));
       }
     }).catch(function (e) { wait.remove(); bubble("blocked", escH(aiError(e))); })
       .then(function () { S.ai.busy = false; $("chat-send").disabled = !S.ai.provider; });
@@ -576,12 +600,13 @@
       "<li><b>Not modelled:</b><ul>" + cur.not_modelled.map(function (n) { return "<li>" + escH(n[0]) + " — " + escH(n[1]) + "</li>"; }).join("") + "</ul></li>",
       "<li>" + escH(cur.checked) + "</li></ul>",
       "<h3>AI features (stage 2)</h3>",
+      "<p><b>What the number check can and cannot do.</b> It confirms that each figure in an answer exists in the engine's output for that conversation, as the same kind of figure (money, percent or plain number), at the precision written, with a matching sign or direction (a figure the engine returned as negative cannot be described as a rise), and, when the engine tied it to a country, next to that country rather than another. It blocks figures written in words, and multiples or fractions (double, half, 3 times) unless you used them. It cannot judge whether the sentence around a correct figure is right. Under every answer the page therefore lists the engine figures used and the field each came from, so you can check them.</p>",
       "<p><b>What the AI does:</b> (1) reads a typed scenario into the same editable lines the menus produce, and you see and can correct them before anything is calculated; (2) answers questions in the analyst panel by calling the engine as a tool (run a scenario, inspect a country, compare two scenarios, look up codes, read today's rates). <b>What it never does:</b> produce a number. Every figure in an analyst answer is checked against the engine's own outputs for that question. If any figure is not there, at the precision shown, the answer is retried once and otherwise withheld, and the engine results are shown instead. A parsed rate must appear in your text, or be derived from today's modelled rate (for “double”), and the page tells you when it was derived.</p>",
-      "<p><b>Where the AI runs:</b> on claude.ai, the page asks Claude through the artifact platform, with no API key and no server; the first use asks your permission, and it counts against the viewer's own Claude usage. A public copy can instead call a small Cloudflare Worker (in the repo's <code>worker/</code> folder) that holds the API key as a secret and forwards to the Anthropic API or any OpenAI-compatible endpoint. The provider sits behind one function, so swapping it changes no other code. Without either, AI is simply off and the rule-based reader is used.</p>",
+      "<p><b>Where the AI runs:</b> on claude.ai, the page asks Claude through the artifact platform, with no API key and no server; the first use asks your permission, and it counts against the viewer's own Claude usage. That means it only works for viewers signed in to Claude; anyone else gets the page with AI switched off (all figures still work). A public copy can instead call a small Cloudflare Worker (in the repo's <code>worker/</code> folder) that holds the API key as a secret and forwards to the Anthropic API or any OpenAI-compatible endpoint. The provider sits behind one function, so swapping it changes no other code. Without either, AI is simply off and the rule-based reader is used.</p>",
       "<p><b>Spend controls:</b> each browser is limited to " + ((window.TES_CONFIG || {}).aiCallsPerHour || 20) + " AI calls an hour, the Worker limits requests per IP address and in total, and the API key should have a monthly spending limit set in the Claude Console.</p>",
       "<p><b>AI reader check:</b> the button below runs the 12 test phrases in <code>tests/parser_eval.json</code> through the AI reader on its cheapest tier and compares the lines with the expected answers (the rule-based reader scores 12/12 on the same set). It makes 12 AI calls. <button type=\"button\" class=\"btn\" id=\"ai-eval\">Run AI reader check</button></p><div id=\"ai-eval-out\" class=\"sub\"></div>",
       "<h3>Coming next</h3><p>Stage 3: any of the 40 largest economies as imposer, so retaliation can be modelled. Stage 4: past tariff episodes and stock-market moves, labelled as history. Stage 5: monthly auto-update.</p>",
-      "<h3>Source code</h3><p>Engine spec, JavaScript and Python engines, pipeline and tests are published with this page: <a href=\"src/ENGINE_SPEC.md.txt\">spec</a> · <a href=\"js/engine.js\">engine.js</a> · <a href=\"src/engine.py.txt\">engine.py</a> · <a href=\"src/build.py.txt\">build.py</a> · <a href=\"src/test_engine.py.txt\">tests</a> · <a href=\"js/ai.js\">ai.js</a> · <a href=\"src/worker.js.txt\">worker</a> · <a href=\"src/current_tariffs.py.txt\">tariff table</a>.</p>"
+      "<h3>Source code</h3><p>All code, data pipeline and tests are on GitHub: <a href=\"https://github.com/shozmoz1401/Eco-Tariff-Project\">shozmoz1401/Eco-Tariff-Project</a> (<a href=\"https://github.com/shozmoz1401/Eco-Tariff-Project/blob/main/ENGINE_SPEC.md\">spec</a> · <a href=\"https://github.com/shozmoz1401/Eco-Tariff-Project/blob/main/site/js/engine.js\">engine.js</a> · <a href=\"https://github.com/shozmoz1401/Eco-Tariff-Project/blob/main/pipeline/engine.py\">engine.py</a> · <a href=\"https://github.com/shozmoz1401/Eco-Tariff-Project/blob/main/pipeline/build.py\">pipeline</a> · <a href=\"https://github.com/shozmoz1401/Eco-Tariff-Project/blob/main/pipeline/current_tariffs.py\">tariff table</a> · <a href=\"https://github.com/shozmoz1401/Eco-Tariff-Project/blob/main/site/js/ai.js\">ai.js</a> · <a href=\"https://github.com/shozmoz1401/Eco-Tariff-Project/blob/main/worker/src/index.js\">Worker</a> · <a href=\"https://github.com/shozmoz1401/Eco-Tariff-Project/tree/main/tests/\">tests</a>).</p>"
     ].join("");
     a.dataset.done = "1";
     var b = $("ai-eval");

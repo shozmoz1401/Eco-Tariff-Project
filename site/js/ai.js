@@ -21,45 +21,121 @@
   function pts(x) { return (x >= 0 ? "+" : "-") + Math.abs(x * 100).toFixed(1) + " pts"; }
 
   // ------------------------------------------------------------------ number check
-  var NUM_RE = /(US\$|\$)?\s?([-−–]\s?)?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(?:\s*(trillion|billion|million|thousand|tn|bn|mn|m|k|b)(?![a-z]))?\s*(%|percent|per cent|percentage points|pts|points|pp|x(?![a-z])|×|times)?/gi;
+  // A figure in AI text is shown only if it matches a figure the engine returned for this question
+  // (or the user's own words): same kind (money / percent / plain), same magnitude at the stated
+  // precision, a compatible sign or direction, and, where the engine tied it to a country, that
+  // country (not another one) in the same clause. Number words and multiples are blocked.
+  var NUM_RE = /(?<![\w.])([-−–+]\s?)?(US\$|\$)?\s?([-−–+]\s?)?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(?:\s*(trillion|billion|million|thousand|tn|bn|mn|m|k|b)(?![a-z]))?\s*(%|percent|per cent|percentage points|pts|points|pp|x(?![a-z])|×|times|-?fold)?/gi;
   var SCALE = { tn: 1e12, trillion: 1e12, bn: 1e9, b: 1e9, billion: 1e9, mn: 1e6, m: 1e6, million: 1e6, k: 1e3, thousand: 1e3 };
+  var WORDNUM = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred";
+  var WORD_FIGURE = new RegExp("\\b(?:" + WORDNUM + ")(?:[\\s-]+(?:" + WORDNUM + "))*\\s+(?:percent|per cent|percentage points|points|billion|million|trillion|thousand|times|fold)\\b", "gi");
+  var MULT_WORD = /\b(twice|thrice|doubl(?:e|es|ed|ing)|tripl(?:e|es|ed|ing)|quadrupl(?:e|es|ed|ing)|halv(?:e|es|ed|ing)|half|(?:a|one)[\s-](?:third|quarter|fifth)|two[\s-]thirds|three[\s-]quarters|\w+fold)\b/gi;
+  var UP_W = "rise|rises|rising|rose|risen|increase|increases|increased|increasing|up|gain|gains|gained|gaining|grow|grows|grew|growing|jump|jumps|jumped|climb|climbs|climbed|higher|add|adds|added|plus|boost|boosts|hike|hikes";
+  var DOWN_W = "fall|falls|fell|fallen|falling|drop|drops|dropped|decline|declines|declined|decrease|decreases|decreased|cut|cuts|lower|down|lose|loses|lost|losing|shrink|shrinks|shrank|reduce|reduces|reduced|minus|negative|saves|saving|savings";
+  var DIR_BEFORE = new RegExp("\\b(" + UP_W + "|" + DOWN_W + ")\\s+(?:by\\s+|of\\s+)?(?:about|around|roughly|nearly|almost|some|just|over|under|only)?\\s*$", "i");
+  var DIR_AFTER = new RegExp("^\\s*(?:\\w+\\s+)?(increase|rise|jump|gain|hike|boost|surge|cut|drop|fall|decline|reduction|decrease|loss|saving)\\b", "i");
+  var DOWN_SET = new RegExp("^(" + DOWN_W + "|reduction|loss|saving)$", "i");
+  var COUNT_BEFORE = /\b(top|rank|ranks|ranked|number|no\.|#|first|all)\s*$/i;
+  var COUNT_AFTER = /^\s*(countries|country|economies|economy|sectors|sector|chapters|chapter|products|product|lines|line|suppliers|supplier|partners|calls|tools|layers|largest|biggest|most|of the|of them|th\b|st\b|nd\b|rd\b)/i;
 
   function extractNumbers(text) {
-    var out = [], m;
+    var out = [], m, s = String(text);
     NUM_RE.lastIndex = 0;
-    while ((m = NUM_RE.exec(String(text)))) {
-      var intPart = m[3].replace(/,/g, ""), dec = m[4] || "";
+    while ((m = NUM_RE.exec(s))) {
+      var intPart = m[4].replace(/,/g, ""), dec = m[5] || "";
       var v = parseFloat(intPart + (dec ? "." + dec : ""));
-      var unit = (m[5] || "").toLowerCase(), pc = (m[6] || "").toLowerCase();
-      // "m" or "b" glued to a word (e.g. "5 more") is not a unit: \b above handles most; also require $ for bare m/b
-      if ((unit === "m" || unit === "b") && !m[1]) unit = "";
+      var unit = (m[6] || "").toLowerCase(), pc = (m[7] || "").toLowerCase();
+      if ((unit === "m" || unit === "b") && !m[2]) unit = "";
       var scale = unit ? SCALE[unit] : 1;
-      var mult = pc === "x" || pc === "×" || pc === "times";
-      out.push({ raw: m[0].trim(), value: v * scale, num: v, decimals: dec.length, scale: scale,
-                 kind: mult ? "plain" : pc ? "pct" : (m[1] || unit ? "money" : "plain") });
+      var sg = (m[1] || m[3] || "").trim(), sign = sg === "+" ? 1 : sg ? -1 : 0;
+      var mult = /^(x|×|times|-?fold)$/.test(pc);
+      out.push({ raw: m[0].trim(), value: v * scale, num: v, decimals: dec.length, scale: scale, sign: sign,
+                 kind: mult ? "mult" : pc ? "pct" : (m[2] || unit ? "money" : "plain"), index: m.index, end: m.index + m[0].length });
     }
     return out;
   }
 
-  // allowedText: everything the engine returned (tool results), plus the user's words and our own prompt.
-  function checkNumbers(text, allowedText, opts) {
-    opts = opts || {};
-    var smallInt = opts.smallInt === undefined ? 10 : opts.smallInt;
-    var allowed = extractNumbers(allowedText).map(function (a) { return a.value; });
-    var bad = [];
-    extractNumbers(text).forEach(function (n) {
-      var tol = 0.5 * Math.pow(10, -n.decimals);
-      var ok = false;
-      if (n.kind === "plain" && n.decimals === 0 && n.num <= smallInt) ok = true; // counts like "top 3"
-      for (var i = 0; i < allowed.length && !ok; i++) {
-        var a = Math.abs(allowed[i]);
-        if (n.kind === "money") ok = Math.abs(a - n.value) <= tol * n.scale;
-        else if (n.kind === "pct") ok = Math.abs(a - n.num) <= tol || Math.abs(a * 100 - n.num) <= tol;
-        else ok = Math.abs(a - n.num) <= tol;
+  // Allowed figures: every number inside tool outputs (with where it came from) plus the user's own words.
+  function buildAllowed(toolLog, userText) {
+    var entries = [];
+    function leaf(str, path, label, key) {
+      var inv = /lost|loss/i.test(key || "") ? -1 : 1;   // a positive "trade_lost" is a fall
+      extractNumbers(str).forEach(function (n) {
+        var signed = (n.sign < 0 ? -1 : 1) * n.value * inv;
+        entries.push({ kind: n.kind, value: n.value, num: n.num, signed: signed, label: label || null, path: path });
+      });
+    }
+    function walk(x, path, label, key) {
+      if (x === null || x === undefined) return;
+      if (typeof x === "string") return leaf(x, path, label, key);
+      if (typeof x === "number") return entries.push({ kind: "plain", value: Math.abs(x), num: Math.abs(x), signed: x, label: label || null, path: path });
+      if (Array.isArray(x)) return x.forEach(function (y, i) { walk(y, path, label, key); });
+      if (typeof x === "object") {
+        var lab = x.country || label;
+        Object.keys(x).forEach(function (k) { walk(x[k], path + " › " + (x.country && k !== "country" ? x.country + " › " : "") + k, lab, k); });
       }
-      if (!ok) bad.push(n.raw);
+    }
+    (toolLog || []).forEach(function (l) { walk(l.output, l.name, null, ""); });
+    if (userText) leaf(userText, "your words", null, "");
+    return entries;
+  }
+
+  function clauseAround(text, i) {
+    var parts = /[.!?](?=\s|$)|[;:\n]|,\s|\s(?:and|but|while|whereas|against|versus|vs\.?|compared with|than)\s/gi, start = 0, end = text.length, m;
+    parts.lastIndex = 0;
+    while ((m = parts.exec(text))) { if (m.index < i) start = m.index + m[0].length; else { end = m.index; break; } }
+    return text.slice(start, end);
+  }
+
+  // entries: from buildAllowed() (or a plain string, treated as one allowed text). opts: {userText, countryNames, smallInt}
+  function checkNumbers(text, entries, opts) {
+    opts = opts || {};
+    if (typeof entries === "string") entries = buildAllowed([], entries);
+    text = String(text || "");
+    var user = String(opts.userText || ""), smallInt = opts.smallInt === undefined ? 10 : opts.smallInt;
+    var countries = (opts.countryNames || []).filter(function (c) { return c && c.length > 2; });
+    var bad = [], used = [], m;
+    WORD_FIGURE.lastIndex = 0;
+    while ((m = WORD_FIGURE.exec(text))) bad.push({ raw: m[0], reason: "figure written in words" });
+    MULT_WORD.lastIndex = 0;
+    while ((m = MULT_WORD.exec(text))) {
+      var stem = m[0].toLowerCase().slice(0, 4);
+      if (user.toLowerCase().indexOf(stem) < 0) bad.push({ raw: m[0], reason: "multiple or fraction the engine did not return" });
+    }
+    extractNumbers(text).forEach(function (n) {
+      var before = text.slice(Math.max(0, n.index - 40), n.index), after = text.slice(n.end, n.end + 30);
+      if (n.kind === "mult") {
+        if (!extractNumbers(user).some(function (u) { return u.kind === "mult" && u.num === n.num; })) bad.push({ raw: n.raw, reason: "multiple the engine did not return" });
+        return;
+      }
+      if (n.kind === "plain" && n.decimals === 0 && n.num <= smallInt && n.sign === 0 && (COUNT_BEFORE.test(before) || COUNT_AFTER.test(after))) return;
+      // required direction: explicit sign, else a direction word right before ("rise by") or after ("a $2bn cut")
+      var req = n.sign, d = before.match(DIR_BEFORE) || after.match(DIR_AFTER);
+      if (!req && d) req = DOWN_SET.test(d[1]) ? -1 : 1;
+      var tol = 0.5 * Math.pow(10, -n.decimals);
+      var cands = entries.filter(function (a) {
+        if (a.kind !== n.kind) return false;
+        var mag = n.kind === "money" ? Math.abs(Math.abs(a.signed) - n.value) <= tol * n.scale : Math.abs(Math.abs(a.signed) - n.num) <= tol;
+        if (!mag) return false;
+        if (req < 0) return a.signed < 0;
+        if (req > 0) return a.signed >= 0;
+        return true;
+      });
+      if (!cands.length) {
+        var wrongSign = entries.some(function (a) { return a.kind === n.kind && (n.kind === "money" ? Math.abs(Math.abs(a.signed) - n.value) <= tol * n.scale : Math.abs(Math.abs(a.signed) - n.num) <= tol); });
+        bad.push({ raw: n.raw, reason: wrongSign ? "direction does not match the engine" : "not returned by the engine" });
+        return;
+      }
+      // attribution: if every match belongs to a country, a country named in the clause must be one of them
+      var clause = clauseAround(text, n.index), named = countries.filter(function (c) { return new RegExp("\\b" + c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b").test(clause); });
+      var labelled = cands.every(function (a) { return a.label; });
+      var pref = cands.filter(function (a) { return a.label && named.indexOf(a.label) >= 0; });
+      if (labelled && named.length && !pref.length) { bad.push({ raw: n.raw, reason: "the engine gives this figure for " + cands[0].label + ", not " + named.join("/") }); return; }
+      // provenance: the named country's figure first, then a figure tied to no country, then any match
+      var pick = pref[0] || cands.filter(function (a) { return !a.label; })[0] || cands[0];
+      used.push({ raw: n.raw, source: pick.path });
     });
-    return { ok: bad.length === 0, bad: bad };
+    return { ok: bad.length === 0, bad: bad.map(function (b) { return b.raw; }), problems: bad, used: used };
   }
 
   // ------------------------------------------------------------------ engine tools
@@ -95,6 +171,7 @@
     function summary(res, y) {
       var bc = res.byCountry, t = res.totals;
       var hit = Object.keys(bc).filter(function (k) { return bc[k].hit > 0; }).sort(function (a, b) { return bc[b].hit - bc[a].hit; });
+      var raises = Object.keys(bc).filter(function (k) { return bc[k].imports > 0 && (bc[k].sim_bill - bc[k].cur_bill) / bc[k].imports > 0.0005; });
       var cuts = Object.keys(bc).filter(function (k) { return bc[k].imports > 0 && (bc[k].cur_bill - bc[k].sim_bill) / bc[k].imports > 0.0005; })
         .sort(function (a, b) { return (bc[b].cur_bill - bc[b].sim_bill) - (bc[a].cur_bill - bc[a].sim_bill); });
       var chs = Object.keys(res.byChapter).filter(function (c) { return res.byChapter[c].hit > 0; }).sort(function (a, b) { return res.byChapter[b].hit - res.byChapter[a].hit; });
@@ -106,11 +183,12 @@
                   trade_lost: money(t.lost), sensitivity_used: ctx.elasticity(), countries_hit: hit.length },
         most_exposed: hit.slice(0, 10).map(function (k) { return countryRow(k, bc[k]); }),
         sectors_hit: chs.slice(0, 8).map(function (c) { return { chapter: c, name: ctx.chName(c), exports_hit: money(res.byChapter[c].hit), tariff_bill: money(res.byChapter[c].bill) }; }),
-        who_gains: gk.slice(0, 15).map(function (k) {
+        who_gains: !raises.length && cuts.length ? "not shown: this scenario only lowers tariffs, so trade would move toward the targeted countries, not away from them" : gk.slice(0, 15).map(function (k) {
           var parts = Object.keys(g[k].chapters).sort(function (a, b) { return g[k].chapters[b] - g[k].chapters[a]; }).slice(0, 3);
           return { country: ctx.name(k), code: k, diversion_potential: money(g[k].total), share_of_its_us_exports: pct(g[k].share_of_us_exports),
                    top_products: parts.map(function (c) { return { chapter: c, name: ctx.chName(c), amount: money(g[k].chapters[c]) }; }) };
         }),
+        who_gains_note: raises.length && cuts.length ? "for the countries in tariff_cuts this scenario lowers tariffs, so trade would move toward them; who_gains assumes every line is a new tariff" : undefined,
         tariff_cuts: cuts.slice(0, 5).map(function (k) { return { country: ctx.name(k), code: k, avg_rate_today: pct(bc[k].cur_bill / bc[k].imports), avg_rate_scenario: pct(bc[k].sim_bill / bc[k].imports) }; })
       };
     }
@@ -204,26 +282,39 @@
       "Each line: targets (\"ALL\" or a list of ISO3 codes), products (\"ALL\" or a list of 2-digit HS chapters), rate (percent, 0 or higher), optional exclude_targets / exclude_products.",
       "Use find_codes to look up codes you are unsure of. EU means all 27 member states. Narrow products map to their chapter (smartphones -> 85, almonds -> 08, EVs -> 87); say so in notes.",
       "Rates must come from the user's text. For relative changes (\"double\", \"halve\", \"raise by 10 points\") call current_rate and set derived_from to that tool's avg_rate_today_number and factor/add accordingly.",
-      "Never invent a rate. If no rate can be determined, leave the line out and explain in unsupported.",
+      "Never invent a rate. If no rate can be determined, leave the line out and explain in unsupported. If the text is not a tariff scenario, return no lines and say so in unsupported.",
       "Reply with JSON only, no prose: {\"lines\":[{\"targets\":...,\"products\":...,\"rate\":...,\"exclude_targets\":[],\"exclude_products\":[],\"derived_from\":null}],\"notes\":[],\"unsupported\":[]}",
       "HS chapters: " + chapterList(ctx)
     ].join("\n");
   }
 
-  function analystSystem(ctx, scenarioLines, mode) {
+  // The analyst prompt is a fixed base plus one line describing the user's scenario.
+  // The Worker holds a generated copy of the base (worker/src/spec.generated.js) and rebuilds the same prompt.
+  function analystBase(ctx) {
     return [
       "You are the analyst panel of a Tariff Exposure Simulator built from UN Comtrade trade data and World Bank GDP. The US is the only imposer in this version.",
       "RULES:",
-      "1. Every number you write must come from a tool result in this conversation. Copy figures as the tool formatted them. Never do arithmetic yourself: if you need a difference or comparison, call compare_scenarios. Answers containing other numbers are blocked automatically.",
+      "1. Every number you write must come from a tool result in this conversation, copied as the tool formatted it, next to the country it belongs to, with its sign (a negative change is a fall). Never do arithmetic, never write multiples or fractions (double, half, 3 times) and never write figures in words. If you need a difference or comparison, call compare_scenarios. Answers that break this are blocked automatically.",
       "2. The engine measures exposure (the trade a tariff applies to), not damage, and does not forecast prices, GDP or stock markets. Never predict those.",
-      "3. 'Who gains' is a frictionless benchmark: untaxed suppliers' current market share times the value hit. Real switching is slower; non-tariff barriers such as quality standards, certification and trade finance limit it (the ECO 359 survey behind this project found India's 2018-20 gains fell short of such benchmarks for that reason).",
+      "3. 'Who gains' is a frictionless benchmark: untaxed suppliers' current market share times the value hit. Real switching is slower; non-tariff barriers such as quality standards, certification and trade finance limit it (the ECO 359 survey behind this project found India's 2018-20 gains fell short of such benchmarks for that reason). It is not shown for a scenario that only cuts tariffs.",
       "4. Today's tariffs come from a dated hand-built table and stack in layers (Section 232 product tariffs; country-wide Section 301 duties). In replace mode, a country-wide line replaces the country-wide layers and keeps Section 232; a line naming products replaces everything on them.",
       "5. Share of GDP overstates the hit, because exports are gross sales and GDP is value added.",
-      "6. Plain English, at most 150 words, no tables, no markdown headings. Name the tool results you relied on in passing (e.g. 'the engine shows').",
-      "The user's current scenario (" + (mode || "replace") + " mode): " + JSON.stringify(scenarioLines || []) + ". Use it when they say 'this scenario'.",
+      "6. Plain English, at most 150 words, no tables, no markdown headings. Mention in passing which tool results you relied on (e.g. 'the engine shows').",
+      "7. Only answer questions about this simulator, its data and its scenarios. Politely decline anything else.",
       "Data years available: " + ctx.years.join(", ") + " (default " + ctx.defaultYear + ").",
       "HS chapters: " + chapterList(ctx)
     ].join("\n");
+  }
+  function scenarioLine(scenarioLines, mode) {
+    return "The user's current scenario (" + (mode === "add" ? "add" : "replace") + " mode): " + JSON.stringify(scenarioLines || []) + ". Use it when they say 'this scenario'.";
+  }
+  function analystSystem(ctx, scenarioLines, mode) { return analystBase(ctx) + "\n" + scenarioLine(scenarioLines, mode); }
+
+  // Everything the Worker needs to rebuild prompts and tool definitions server-side.
+  var READER_TOOLS = ["find_codes", "current_rate"];
+  function workerSpec(ctx) {
+    var T = makeTools(ctx), defs = function (names) { return T.defs.filter(function (d) { return !names || names.indexOf(d.name) >= 0; }).map(function (d) { return { name: d.name, description: d.description, input_schema: d.inputSchema }; }); };
+    return { reader_system: parserSystem(ctx), analyst_base: analystBase(ctx), tools: { reader: defs(READER_TOOLS), analyst: defs(null) } };
   }
 
   // ------------------------------------------------------------------ providers
@@ -251,31 +342,32 @@
     };
   }
 
-  // HTTP provider: talks to the Cloudflare Worker in /worker (normalized protocol), runs tools locally.
+  // HTTP provider: talks to the Cloudflare Worker in /worker. It sends only the task name, the user's
+  // question, the scenario, recent plain-text history and the tool turns; the Worker holds the prompts and
+  // tool definitions. Tools run here, in the page.
   function httpProvider(endpoint, fetchImpl) {
     var F = fetchImpl || (typeof fetch !== "undefined" ? fetch.bind(root) : null);
     return {
       name: "http", label: "Claude API via the project's proxy",
       run: function (o) {
-        var log = [], tools = o.tools || [];
-        var messages = (o.history || []).map(function (h) { return { role: h.role, content: h.content }; });
-        messages.push({ role: "user", content: o.user });
-        var defs = tools.map(function (t) { return { name: t.name, description: t.description, input_schema: t.inputSchema }; });
+        var log = [], tools = o.tools || [], turns = [];
+        var history = (o.history || []).map(function (h) { return { role: h.role, content: h.content }; });
         function step(round) {
           if (round > 6) return Promise.resolve({ text: "", toolLog: log, error: "too_many_tool_rounds" });
-          return F(endpoint, { method: "POST", headers: { "content-type": "application/json" },
-              body: JSON.stringify({ tier: o.tier || "default", system: o.system, messages: messages, tools: defs }) })
+          var body = { task: o.task, question: o.question || o.user, turns: turns };
+          if (o.task === "analyst") { body.scenario = o.scenario || { lines: [], mode: "replace" }; body.history = history; }
+          return F(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
             .then(function (r) { return r.json().then(function (j) { if (!r.ok) { var e = new Error(j.error || ("HTTP " + r.status)); e.code = r.status === 429 ? "rate_limited" : "upstream"; throw e; } return j; }); })
             .then(function (j) {
               if (!j.tool_calls || !j.tool_calls.length) return { text: j.text || "", toolLog: log, usage: j.usage };
-              messages.push({ role: "assistant", content: j.text || "", tool_calls: j.tool_calls });
+              turns.push({ role: "assistant", text: j.text || "", tool_calls: j.tool_calls });
               var results = j.tool_calls.map(function (c) {
                 var t = tools.filter(function (x) { return x.name === c.name; })[0], out;
                 try { out = t ? t.run(c.input || {}) : { error: "unknown tool " + c.name }; } catch (e) { out = { error: String(e.message || e) }; }
                 log.push({ name: c.name, input: c.input, output: out });
                 return { id: c.id, output: JSON.stringify(out) };
               });
-              messages.push({ role: "tool", results: results });
+              turns.push({ role: "tool", results: results });
               return step(round + 1);
             });
         }
@@ -295,8 +387,8 @@
 
   // AI parser. Returns {lines, notes, unsupported, warnings}. Throws if unusable (caller falls back).
   function aiParse(provider, ctx, text) {
-    var T = makeTools(ctx), tools = T.defs.filter(function (d) { return d.name === "find_codes" || d.name === "current_rate"; });
-    return provider.run({ system: parserSystem(ctx), user: text, tools: tools, tier: "quick" }).then(function (r) {
+    var T = makeTools(ctx), tools = T.defs.filter(function (d) { return READER_TOOLS.indexOf(d.name) >= 0; });
+    return provider.run({ system: parserSystem(ctx), user: text, tools: tools, tier: "quick", task: "reader", question: text }).then(function (r) {
       var j = parseJSON(r.text), warnings = [], userNums = extractNumbers(text).map(function (n) { return n.num; });
       var toolNums = extractNumbers(toolContext(r.toolLog)).map(function (n) { return n.num; });
       var lines = (j.lines || []).filter(function (L) {
@@ -314,18 +406,24 @@
     });
   }
 
-  // Analyst. Returns {text, ok, bad, toolLog, retried}. Text failing the number check is withheld.
-  function analyst(provider, ctx, question, history, scenarioLines, mode) {
+  // Analyst. Returns {text, ok, bad, problems, used, toolLog, retried}. Text failing the number check is withheld.
+  // priorLogs: tool logs from earlier turns of this conversation (their figures stay allowed).
+  function analyst(provider, ctx, question, history, scenarioLines, mode, priorLogs) {
     var T = makeTools(ctx), system = analystSystem(ctx, scenarioLines, mode);
-    var allowedExtra = system + "\n" + question + "\n" + (history || []).map(function (h) { return h.role === "user" ? h.content : ""; }).join("\n");
-    return provider.run({ system: system, user: question, history: history, tools: T.defs, tier: "default" }).then(function (r) {
-      var allowed = allowedExtra + "\n" + toolContext(r.toolLog), c = checkNumbers(r.text, allowed);
-      if (c.ok) return { text: r.text, ok: true, bad: [], toolLog: r.toolLog, retried: false };
-      var fix = question + "\n\n[Your previous draft was blocked because it contained numbers the engine did not return: " + c.bad.join(", ") +
-        ". Call the tools again as needed and answer using only numbers they return, copied exactly.]";
-      return provider.run({ system: system, user: fix, history: history, tools: T.defs, tier: "default" }).then(function (r2) {
-        var log = r.toolLog.concat(r2.toolLog), c2 = checkNumbers(r2.text, allowedExtra + "\n" + toolContext(log));
-        return { text: c2.ok ? r2.text : "", ok: c2.ok, bad: c2.bad, toolLog: log, retried: true };
+    var userWords = [question].concat((history || []).filter(function (h) { return h.role === "user"; }).map(function (h) { return h.content; }))
+      .concat([JSON.stringify(scenarioLines || [])]).join("\n");
+    var countryNames = Object.keys(ctx.data(ctx.defaultYear).imports).map(ctx.name);
+    var opts = { userText: userWords, countryNames: countryNames };
+    var task = { task: "analyst", question: question, scenario: { lines: scenarioLines || [], mode: mode || "replace" } };
+    function run(q) { return provider.run({ system: system, user: q, history: history, tools: T.defs, tier: "default", task: task.task, question: q, scenario: task.scenario }); }
+    return run(question).then(function (r) {
+      var log = (priorLogs || []).concat(r.toolLog), c = checkNumbers(r.text, buildAllowed(log, userWords), opts);
+      if (c.ok) return { text: r.text, ok: true, bad: [], problems: [], used: c.used, toolLog: r.toolLog, retried: false };
+      var fix = question + "\n\n[Your previous draft was blocked: " + c.problems.map(function (p) { return p.raw + " (" + p.reason + ")"; }).join("; ") +
+        ". Call the tools again as needed. Use only figures they return, copied exactly, with the sign they have, next to the country they belong to, and no multiples or number words.]";
+      return run(fix).then(function (r2) {
+        var log2 = log.concat(r2.toolLog), c2 = checkNumbers(r2.text, buildAllowed(log2, userWords), opts);
+        return { text: c2.ok ? r2.text : "", ok: c2.ok, bad: c2.bad, problems: c2.problems, used: c2.used, toolLog: r.toolLog.concat(r2.toolLog), retried: true };
       });
     });
   }
@@ -371,7 +469,7 @@
     ["anyOf", "oneOf", "allOf"].forEach(function (k) { if (x[k]) kids = kids.concat(x[k]); });
     return 1 + kids.reduce(function (m, k) { return Math.max(m, schemaDepth(k)); }, 0);
   }
-  var api = { schemaDepth: schemaDepth, extractNumbers: extractNumbers, checkNumbers: checkNumbers, makeTools: makeTools, artifactProvider: artifactProvider,
+  var api = { workerSpec: workerSpec, scenarioLine: scenarioLine, analystBase: analystBase, schemaDepth: schemaDepth, buildAllowed: buildAllowed, extractNumbers: extractNumbers, checkNumbers: checkNumbers, makeTools: makeTools, artifactProvider: artifactProvider,
               httpProvider: httpProvider, aiParse: aiParse, analyst: analyst, rateGate: rateGate, detect: detect,
               parserSystem: parserSystem, analystSystem: analystSystem, parseJSON: parseJSON, money: money, pct: pct };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

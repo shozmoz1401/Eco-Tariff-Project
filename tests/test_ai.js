@@ -7,7 +7,7 @@ const AI = require("../site/js/ai.js"), P = require("../site/js/parser.js");
 const L = (f) => JSON.parse(fs.readFileSync(f));
 const data = { 2024: L("site/data/usa_2024.json"), 2025: L("site/data/usa_2025.json") }, gdp = L("site/data/gdp.json"), current = L("site/data/current_us.json"), meta = L("site/data/meta.json");
 const ctx = { data: (y) => data[y], gdp: (y) => gdp[String(y)], current, years: [2024, 2025], defaultYear: 2025,
-  name: (iso) => data[2025].names[iso] || iso, chName: (c) => (meta.chapters[c] || {}).short || c, elasticity: () => 0.76 };
+  name: (iso) => ({ VNM: "Vietnam", KOR: "South Korea", TUR: "Türkiye", RUS: "Russia", GBR: "United Kingdom", USA: "United States" })[iso] || data[2025].names[iso] || iso, chName: (c) => (meta.chapters[c] || {}).short || c, elasticity: () => 0.76 };
 let fails = 0;
 const check = (n, c, x = "") => { console.log((c ? "PASS " : "FAIL ") + n + (x ? "  " + x : "")); if (!c) fails++; };
 
@@ -35,9 +35,61 @@ const check = (n, c, x = "") => { console.log((c ? "PASS " : "FAIL ") + n + (x ?
   check("tool run_scenario: [\"ALL\"] means all", tool("run_scenario").run({ lines: [{ targets: ["ALL"], products: ["87"], rate: 25 }] }).totals.countries_hit > 100);
   const th = tool("country_detail").run({ code: "THA", lines });
   check("tool country_detail: who-gains rank for any country (Thailand)", th.who_gains.diversion_potential === AI.money(eng.gains.THA.total) && th.who_gains.rank > 0, JSON.stringify(th.who_gains).slice(0, 90));
+  const cutOnly = tool("run_scenario").run({ lines: [{ targets: ["CHN"], products: ["ALL"], rate: 25 }] });
+  check("cut-only scenario: who_gains not shown", typeof cutOnly.who_gains === "string" && /only lowers/.test(cutOnly.who_gains));
+  check("mixed scenario: who_gains shown with a note", Array.isArray(s.who_gains) && /lowers tariffs/.test(s.who_gains_note || ""));
   check("tool find_codes", tool("find_codes").run({ query: "viet" }).matches.some((m) => m.code === "VNM"));
   const cr = tool("current_rate").run({ targets: ["CHN"], products: ["87"] });
   check("tool current_rate: China vehicles", cr.avg_rate_today_number > 40, cr.avg_rate_today);
+
+  // ---- review cases (stage 2 review, item 1): realistic allowed set from real tool outputs, no system prompt
+  const defaultLines = lines;
+  const realLog = [
+    { name: "run_scenario", output: tool("run_scenario").run({ lines: defaultLines }) },
+    { name: "compare_scenarios", output: tool("compare_scenarios").run({ a_lines: [], b_lines: [{ targets: ["CHN"], products: ["ALL"], rate: 25 }], codes: ["CHN"] }) },
+    { name: "compare_scenarios", output: tool("compare_scenarios").run({ a_lines: defaultLines, b_lines: [{ targets: ["CHN"], products: ["ALL"], rate: 25 }], codes: ["VNM", "THA", "MEX"] }) },
+    { name: "country_detail", output: tool("country_detail").run({ code: "VNM", lines: defaultLines }) },
+    { name: "run_scenario", output: tool("run_scenario").run({ lines: [{ targets: ["CHN"], products: ["ALL"], rate: 25 }] }) },
+    { name: "country_detail", output: tool("country_detail").run({ code: "THA", lines: defaultLines }) },
+  ];
+  const vdIdx = 3, tdIdx = 5;
+  const question = "Compare this scenario with 25% on China only, and why does Vietnam gain more than Thailand?";
+  const userWords = question + "\n" + JSON.stringify(defaultLines);
+  const names = Object.keys(data[2025].imports).map(ctx.name);
+  const allowedReal = AI.buildAllowed(realLog, userWords), o = { userText: userWords, countryNames: names };
+  const cmp2 = realLog[2].output.countries, vn = cmp2.find((c) => c.code === "VNM"), thc = cmp2.find((c) => c.code === "THA");
+  const chinaDiff = realLog[1].output.countries[0].duties_difference.replace("-", "");
+  const mustBlock = [
+    "Prices will rise 45% and Chinese exports fall 60%.",
+    "Vietnam captures 87% of the diverted trade.",
+    `Duties on China rise by ${chinaDiff}.`,
+    `Thailand gains ${vn.diversion_potential_b} and Vietnam gains ${thc.diversion_potential_b}.`,
+    "Exports fall by forty percent.",
+    "Vietnam gains 3 times as much as Thailand.",
+    "By 2025 this doubles.",
+    "Vietnam's gain is twice Thailand's.",
+    "Mexico gains 1.5x more.",
+    "placeholder",
+  ];
+  const vdEarly = realLog[3].output;
+  mustBlock[mustBlock.length - 1] = `Thailand captures ${vdEarly.who_gains.share_of_its_us_exports} of its US exports.`;
+  for (const t of mustBlock) { const r = AI.checkNumbers(t, allowedReal, o); check(`review case blocked: "${t}"`, !r.ok, JSON.stringify(r.problems.map((p) => p.reason))); }
+  const vd = realLog[vdIdx].output, td = realLog[tdIdx].output, mx = realLog[0].output.most_exposed.find((c) => c.code === "MEX");
+  const mustPass = [
+    `The engine shows Vietnam with a diversion potential of ${vd.who_gains.diversion_potential} (rank ${vd.who_gains.rank}). Thailand has ${td.who_gains.diversion_potential} (rank ${td.who_gains.rank}).`,
+    `Vietnam sells ${vd.us_imports} to the US, against ${td.us_imports} for Thailand.`,
+    `Relative to their own exports the two are close: ${vd.who_gains.share_of_its_us_exports} for Vietnam and ${td.who_gains.share_of_its_us_exports} for Thailand.`,
+    `China's duties fall by ${chinaDiff}.`,
+    `China's average rate falls from ${realLog[4].output.tariff_cuts[0].avg_rate_today} to ${realLog[4].output.tariff_cuts[0].avg_rate_scenario} under a 25% line.`,
+    `Mexico loses ${mx.trade_lost} of trade and is most exposed at ${mx.share_of_gdp} of GDP.`,
+    `Your scenario hits ${realLog[2].output.overall.exports_hit_a}; China-only hits ${realLog[2].output.overall.exports_hit_b}, a difference of ${realLog[2].output.overall.exports_hit_difference}.`,
+    "The top 5 countries and 3 sectors carry most of it.",
+  ];
+  for (const t of mustPass) { const r = AI.checkNumbers(t, allowedReal, o); check(`honest sentence passes: "${t.slice(0, 70)}"`, r.ok, JSON.stringify(r.problems)); }
+  const usedShare = AI.checkNumbers(mustPass[2], allowedReal, o).used;
+  check("figure is traced to the country named next to it", usedShare.length === 2 && usedShare[1].source.includes("Thailand"), usedShare.map((u) => u.source).join(" | "));
+  const usedR = AI.checkNumbers(mustPass[0], allowedReal, o).used;
+  check("figures used are traced to engine fields", usedR.length >= 2 && usedR[0].source.includes("who_gains"), usedR[0] && usedR[0].source);
 
   // ---- fake model behind the HTTP provider (exercises the real tool loop)
   function fakeModel(script) {
@@ -48,7 +100,7 @@ const check = (n, c, x = "") => { console.log((c ? "PASS " : "FAIL ") + n + (x ?
       return { ok: true, status: 200, json: async () => out };
     };
   }
-  const lastTool = (body) => JSON.parse(body.messages[body.messages.length - 1].results[0].output);
+  const lastTool = (body) => JSON.parse(body.turns[body.turns.length - 1].results[0].output);
   const honest = [() => ({ text: "", tool_calls: [{ id: "a", name: "run_scenario", input: { lines } }] }),
                   (b) => ({ text: `The engine shows ${lastTool(b).totals.exports_hit} of exports hit; Mexico is most exposed at ${lastTool(b).most_exposed[0].share_of_gdp} of GDP.` })];
   let prov = AI.httpProvider("https://proxy/v1/agent", fakeModel(honest));
@@ -71,6 +123,17 @@ const check = (n, c, x = "") => { console.log((c ? "PASS " : "FAIL ") + n + (x ?
   prov = AI.httpProvider("https://proxy/v1/agent", fakeModel(arith));
   r = await AI.analyst(prov, ctx, "Compare", [], lines, "replace");
   check("analyst: differences from compare_scenarios pass", r.ok, r.text);
+
+  const repeat = [() => ({ text: "As before, $443.1bn of exports are hit." })];
+  prov = AI.httpProvider("https://proxy/v1/agent", fakeModel(repeat));
+  r = await AI.analyst(prov, ctx, "Remind me?", [{ role: "user", content: "How big?" }, { role: "assistant", content: "The engine shows $443.1bn." }], lines, "replace", [{ name: "run_scenario", output: s }]);
+  check("analyst: figures from earlier turns' engine calls stay allowed", r.ok, JSON.stringify(r.problems));
+  r = await AI.analyst(AI.httpProvider("https://proxy/v1/agent", fakeModel(repeat)), ctx, "Remind me?", [], lines, "replace", []);
+  check("analyst: same figure without any engine call is blocked", !r.ok);
+
+  let sentKeys = null;
+  await AI.analyst(AI.httpProvider("x", async (u, init) => { sentKeys = Object.keys(JSON.parse(init.body)); return { ok: true, status: 200, json: async () => ({ text: "ok" }) }; }), ctx, "Hi", [], lines, "replace", []);
+  check("HTTP provider sends no system prompt or tool definitions", sentKeys.join(",") === "task,question,turns,scenario,history", sentKeys.join(","));
 
   // ---- artifact provider with a fake sample() that calls a tool
   let seenMsgs = null;

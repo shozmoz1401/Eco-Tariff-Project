@@ -28,3 +28,11 @@ Browser check: `python tests/browser_check.py http://localhost:8765/index.html` 
 - Spend: 20 AI calls per browser per hour; the Worker adds per-IP and global rate limits; set a monthly limit on the API key.
 - `worker/`: Cloudflare Worker proxy (Anthropic or any OpenAI-compatible endpoint, chosen in `callUpstream`). Not deployed; see `worker/DEPLOY.md`.
 - Tests: `node tests/test_ai.js` (number check, tools, analyst loop with a scripted fake model, AI-parser validation), `node worker/test.mjs`, `python tests/browser_ai.py http://localhost:8766/index.html`, `node tests/cost_estimate.js`.
+
+## Stage 2 review fixes (18 Nov 2026)
+1. Number check rebuilt (`checkNumbers` in `site/js/ai.js`): allowed figures come only from tool results and the user's words (not the system prompt); money must match money and percent must match percent; signs and direction words must agree with the engine; figures written in words and multiples or fractions are blocked; small counts only pass as ranks or counts; a figure the engine tied to one country cannot sit next to another. Every answer lists the engine figures it used and their fields. The review's failing examples are tests in `tests/test_ai.js`.
+2. Worker locked down: prompts and tool definitions live in `worker/src/spec.generated.js` (built by `node worker/build_spec.cjs` from `ai.js`; tests fail if stale). The page sends only task, question, scenario, recent history and tool turns; every other shape is rejected.
+3. AI on claude.ai needs a signed-in Claude viewer; others get AI off. Not tested signed-out (link is private; Cloudflare blocks headless browsers).
+4. Model prices confirmed on Anthropic's official pricing page.
+5. `site/src` copies removed; How it works links to GitHub.
+6. "Who gains" is hidden when a scenario only cuts tariffs and flagged when it mixes cuts and increases.

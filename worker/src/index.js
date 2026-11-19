@@ -1,14 +1,18 @@
 // Tariff Exposure Simulator — AI proxy (Cloudflare Worker).
-// Holds the API key as a secret and forwards ONE model call per request. Tools run in the browser,
-// so this Worker never sees or computes engine numbers. Provider is swappable in callUpstream().
+// Holds the API key as a secret and forwards ONE model call per request. The system prompts and tool
+// definitions live HERE (spec.generated.js, built from site/js/ai.js); the page cannot supply its own,
+// so the Worker cannot be used as a general-purpose AI proxy. Tools run in the browser.
 //
-// POST /v1/agent  body: {tier, system, messages, tools}
-//   messages: {role:"user", content} | {role:"assistant", content, tool_calls:[{id,name,input}]} | {role:"tool", results:[{id, output}]}
-//   tools:    [{name, description, input_schema}]
+// POST /v1/agent  body (nothing else is accepted):
+//   {task: "reader"|"analyst", question, scenario?: {lines, mode}, history?: [{role, content}], turns: [...]}
+//   turns alternate {role:"assistant", text, tool_calls:[{id,name,input}]} and {role:"tool", results:[{id, output}]}
 // -> {text, tool_calls:[{id,name,input}], usage:{input_tokens, output_tokens}, model}
+import { SPEC } from "./spec.generated.js";
 
-export const ALLOWED_TOOLS = ["run_scenario", "country_detail", "compare_scenarios", "find_codes", "current_rate"];
-const LIMITS = { bodyBytes: 200_000, messages: 40, systemChars: 20_000, maxTokens: 1024 };
+export const ALLOWED_TOOLS = SPEC.tools.analyst.map((t) => t.name);
+const LIMITS = { bodyBytes: 120_000, question: 1_500, historyItems: 6, historyChars: 2_000, turns: 12, toolOutput: 12_000,
+                 toolInput: 4_000, lines: 10, codes: 60, maxTokens: 1024 };
+const KEYS = { reader: ["task", "question", "turns"], analyst: ["task", "question", "scenario", "history", "turns"] };
 
 function cors(env, origin) {
   const allowed = (env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -28,20 +32,82 @@ function json(body, status, headers) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 }
 
-export function validate(req) {
-  if (!req || typeof req !== "object") return "body must be JSON";
-  if (typeof req.system !== "string" || req.system.length > LIMITS.systemChars) return "system missing or too long";
-  if (!Array.isArray(req.messages) || !req.messages.length || req.messages.length > LIMITS.messages) return "messages missing or too many";
-  for (const m of req.messages) {
-    if (!["user", "assistant", "tool"].includes(m.role)) return "bad message role";
-    if (m.role === "tool" && !Array.isArray(m.results)) return "tool message needs results";
+const isStr = (x, max) => typeof x === "string" && x.length > 0 && x.length <= max;
+const ISO3 = /^[A-Z]{3}$/, HS2 = /^\d{2}$/;
+function codeList(x, re) { return x === "ALL" || (Array.isArray(x) && x.length > 0 && x.length <= LIMITS.codes && x.every((c) => c === "ALL" || (typeof c === "string" && re.test(c)))); }
+
+function validScenario(sc) {
+  if (!sc || typeof sc !== "object" || Array.isArray(sc)) return "scenario must be an object";
+  if (Object.keys(sc).some((k) => !["lines", "mode"].includes(k))) return "unexpected scenario field";
+  if (sc.mode !== undefined && !["replace", "add"].includes(sc.mode)) return "bad mode";
+  if (!Array.isArray(sc.lines) || sc.lines.length > LIMITS.lines) return "bad scenario lines";
+  for (const L of sc.lines) {
+    if (!L || typeof L !== "object") return "bad line";
+    if (Object.keys(L).some((k) => !["targets", "products", "rate", "exclude_targets", "exclude_products"].includes(k))) return "unexpected line field";
+    if (!codeList(L.targets, ISO3) || !codeList(L.products, HS2)) return "bad line codes";
+    if (typeof L.rate !== "number" || !isFinite(L.rate) || L.rate < 0 || L.rate > 1000) return "bad rate";
+    if (L.exclude_targets && !codeList(L.exclude_targets, ISO3)) return "bad exclude_targets";
+    if (L.exclude_products && !codeList(L.exclude_products, HS2)) return "bad exclude_products";
   }
-  if (req.messages[0].role !== "user") return "first message must be from the user";
-  const tools = req.tools || [];
-  if (!Array.isArray(tools)) return "tools must be a list";
-  for (const t of tools) if (!ALLOWED_TOOLS.includes(t.name)) return "tool not allowed: " + t.name;
-  if (req.tier && !["quick", "default"].includes(req.tier)) return "bad tier";
   return null;
+}
+
+// Accept only the exact request shapes the simulator sends.
+export function validate(req) {
+  if (!req || typeof req !== "object" || Array.isArray(req)) return "body must be a JSON object";
+  if (!KEYS[req.task]) return "unknown task";
+  if (Object.keys(req).some((k) => !KEYS[req.task].includes(k))) return "unexpected field";
+  if (!isStr(req.question, LIMITS.question)) return "question missing or too long";
+  if (req.task === "analyst") {
+    const bad = validScenario(req.scenario); if (bad) return bad;
+    const h = req.history || [];
+    if (!Array.isArray(h) || h.length > LIMITS.historyItems) return "bad history";
+    for (let i = 0; i < h.length; i++) {
+      if (!h[i] || Object.keys(h[i]).some((k) => !["role", "content"].includes(k))) return "bad history item";
+      if (h[i].role !== (i % 2 === 0 ? "user" : "assistant") || !isStr(h[i].content, LIMITS.historyChars)) return "bad history item";
+    }
+  }
+  const tools = SPEC.tools[req.task].map((t) => t.name), turns = req.turns || [];
+  if (!Array.isArray(turns) || turns.length > LIMITS.turns) return "bad turns";
+  let pending = null;
+  for (let i = 0; i < turns.length; i++) {
+    const t = turns[i];
+    if (!t || typeof t !== "object") return "bad turn";
+    if (i % 2 === 0) {
+      if (t.role !== "assistant" || Object.keys(t).some((k) => !["role", "text", "tool_calls"].includes(k))) return "bad assistant turn";
+      if (t.text !== undefined && (typeof t.text !== "string" || t.text.length > LIMITS.historyChars)) return "bad assistant text";
+      if (!Array.isArray(t.tool_calls) || !t.tool_calls.length || t.tool_calls.length > 6) return "bad tool calls";
+      for (const c of t.tool_calls) {
+        if (!c || !isStr(c.id, 100) || !tools.includes(c.name) || typeof c.input !== "object" || c.input === null || Array.isArray(c.input)) return "tool call not allowed";
+        if (JSON.stringify(c.input).length > LIMITS.toolInput) return "tool input too large";
+      }
+      pending = t.tool_calls.map((c) => c.id);
+    } else {
+      if (t.role !== "tool" || Object.keys(t).some((k) => !["role", "results"].includes(k)) || !Array.isArray(t.results)) return "bad tool turn";
+      const ids = t.results.map((r) => r && r.id);
+      if (ids.length !== pending.length || ids.some((id, j) => id !== pending[j])) return "tool results do not match the calls";
+      if (t.results.some((r) => typeof r.output !== "string" || r.output.length > LIMITS.toolOutput || Object.keys(r).length !== 2)) return "bad tool result";
+      pending = null;
+    }
+  }
+  if (pending) return "turns must end with tool results";
+  return null;
+}
+
+function scenarioLine(lines, mode) {   // must match scenarioLine() in site/js/ai.js (tested)
+  return "The user's current scenario (" + (mode === "add" ? "add" : "replace") + " mode): " + JSON.stringify(lines || []) + ". Use it when they say 'this scenario'.";
+}
+
+// Build the normalised model request from the validated simulator request.
+export function buildRequest(req) {
+  const system = req.task === "reader" ? SPEC.reader_system : SPEC.analyst_base + "\n" + scenarioLine(req.scenario.lines, req.scenario.mode);
+  const messages = (req.task === "analyst" ? req.history || [] : []).map((h) => ({ role: h.role, content: h.content }));
+  messages.push({ role: "user", content: req.question });
+  for (const t of req.turns || []) {
+    if (t.role === "assistant") messages.push({ role: "assistant", content: t.text || "", tool_calls: t.tool_calls });
+    else messages.push({ role: "tool", results: t.results });
+  }
+  return { tier: req.task === "reader" ? "quick" : "default", system, messages, tools: SPEC.tools[req.task] };
 }
 
 // ---------------------------------------------------------------- provider translation
@@ -131,7 +197,7 @@ export default {
     if (bad) return json({ error: bad }, 400, c.headers);
 
     try {
-      return json(await callUpstream(env, req, fetchImpl), 200, c.headers);
+      return json(await callUpstream(env, buildRequest(req), fetchImpl), 200, c.headers);
     } catch (e) {
       return json({ error: "AI provider error" }, e.status === 429 ? 429 : 502, c.headers);
     }

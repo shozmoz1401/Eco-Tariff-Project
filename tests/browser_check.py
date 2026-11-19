@@ -18,6 +18,8 @@ async def main():
                 await pg.fill(".rate-in input", "-10"); await pg.wait_for_timeout(200)
                 out.append("neg form: " + (await pg.inner_text(".line-note.err")) + " | KPI exports hit still: " + (await pg.inner_text("#kpis .kpi .v")))
                 await pg.fill(".rate-in input", "25"); await pg.wait_for_timeout(200)
+                out.append("cut scenario gains note: " + (await pg.inner_text("#gain-note"))[:120] + " | rows: " + str(len(await pg.query_selector_all("#gains tbody tr"))))
+                await pg.fill("#nl", "60% on China"); await pg.click("#nl-form button"); await pg.wait_for_timeout(300)
                 await pg.click("#gain-sort button[data-sort=share]"); await pg.wait_for_timeout(200)
                 rows = await pg.eval_on_selector_all("#gains tbody tr", "rs => rs.slice(0,4).map(r => r.innerText.replace(/\\t/g,' / '))")
                 out.append("gains by share: " + " || ".join(rows))
