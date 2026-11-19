@@ -1,3 +1,4 @@
+import re
 import sys, asyncio
 from playwright.async_api import async_playwright
 url = sys.argv[1]
@@ -30,4 +31,15 @@ async def main():
                 out.append(f"phone scrollWidth={await pg.evaluate('document.documentElement.scrollWidth')}")
                 await pg.screenshot(path="/tmp/v2_phone.png", full_page=True)
         print("\n".join(out)); await b.close()
+        txt = "\n".join(out)
+        checks = [
+            ("cut notice shown", lambda t: re.search(r"cut notice: .*tariff cut", t) is not None),
+            ("negative rate refused", lambda t: "0% or higher" in t),
+            ("cut-only gains note", lambda t: "only lowers" in t),
+            ("phone width 390", lambda t: "phone scrollWidth=390" in t),
+        ]
+        bad = [d for d, ok in checks if not ok(txt)]
+        bad += [l for l in out if " pageerror" in l or " console error" in l]
+        print("FAILED: " + "; ".join(bad) if bad else "all browser checks passed")
+        sys.exit(1 if bad else 0)
 asyncio.run(main())

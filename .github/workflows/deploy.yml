@@ -1,0 +1,86 @@
+# Publishes site/ to GitHub Pages.
+# - On every push to main: run all tests, deploy only if they pass.
+# - Monthly (3rd of the month): re-pull Comtrade + World Bank, rebuild, run all tests
+#   (including the pipeline's own check figures), commit the new data and deploy only if everything passes.
+name: Test and deploy
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 7 3 * *"
+  workflow_dispatch:
+    inputs:
+      refresh:
+        description: "Re-pull the data before testing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Install
+        run: |
+          pip install requests playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Refresh data (monthly)
+        if: github.event_name == 'schedule' || inputs.refresh
+        run: |
+          python pipeline/fetch.py
+          python pipeline/fetch_extra.py
+          python pipeline/build.py
+
+      - name: Engine, parser, AI and Worker tests
+        run: |
+          node worker/build_spec.cjs
+          git diff --exit-code worker/src/spec.generated.js || (echo "worker spec is stale" && exit 1)
+          python tests/test_engine.py
+          node tests/parser_test.js > /dev/null
+          node tests/test_ai.js
+          node worker/test.mjs
+
+      - name: Browser tests
+        run: |
+          (cd site && python -m http.server 8766 > /dev/null 2>&1 &)
+          sleep 2
+          python tests/browser_ai.py http://localhost:8766/index.html
+          python tests/browser_check.py http://localhost:8766/index.html
+
+      - name: Commit refreshed data
+        if: github.event_name == 'schedule' || inputs.refresh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/data tests/check_figures.json
+          git diff --cached --quiet && echo "data unchanged" || (git commit -m "Monthly data refresh $(date -u +%Y-%m-%d)" && git push)
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: site }
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4

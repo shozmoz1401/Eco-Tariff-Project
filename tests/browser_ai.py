@@ -1,3 +1,4 @@
+import re
 """Headless check of the AI wiring with a stand-in for the claude.ai 'sample' capability.
 The fake model calls the real engine tools and writes answers from their output (and one that invents a number)."""
 import sys, asyncio
@@ -50,4 +51,15 @@ async def main():
         await pg.goto(url, wait_until="networkidle"); await pg.wait_for_timeout(500)
         out.append(f"phone scrollWidth={await pg.evaluate('document.documentElement.scrollWidth')}")
         print("\n".join(out)); await b.close()
+        txt = "\n".join(out)
+        checks = [
+            ("AI reader filled the lines", lambda t: "AIParsed into 1 line" in t and "lines: US Brazil" in t),
+            ("made-up answer withheld", lambda t: re.search(r"chat liar: .*withheld", t) is not None),
+            ("AI off: toggle disabled", lambda t: "noai toggle disabled: True" in t),
+            ("phone width 390", lambda t: "phone scrollWidth=390" in t),
+        ]
+        bad = [d for d, ok in checks if not ok(txt)]
+        bad += [l for l in out if " pageerror" in l or " console error" in l]
+        print("FAILED: " + "; ".join(bad) if bad else "all browser checks passed")
+        sys.exit(1 if bad else 0)
 asyncio.run(main())
