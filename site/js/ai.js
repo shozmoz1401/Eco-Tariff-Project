@@ -70,8 +70,9 @@
       var d = D(y), errs = [];
       if (!Array.isArray(lines)) return { errs: ["lines must be a list"] };
       var clean = lines.map(function (L, i) {
-        var o = { targets: L.targets === "ALL" || !L.targets ? "ALL" : [].concat(L.targets).map(String).map(function (s) { return s.toUpperCase(); }),
-                  products: L.products === "ALL" || !L.products ? "ALL" : [].concat(L.products).map(function (c) { c = String(c); return c.length === 1 ? "0" + c : c; }),
+        var isAll = function (x) { return !x || x === "ALL" || (Array.isArray(x) && (x.length === 0 || (x.length === 1 && String(x[0]).toUpperCase() === "ALL"))); };
+        var o = { targets: isAll(L.targets) ? "ALL" : [].concat(L.targets).map(String).map(function (s) { return s.toUpperCase(); }),
+                  products: isAll(L.products) ? "ALL" : [].concat(L.products).map(function (c) { c = String(c); return c.length === 1 ? "0" + c : c; }),
                   rate: Number(L.rate) };
         if (o.targets !== "ALL") o.targets.forEach(function (t) { if (!d.imports[t]) errs.push("line " + (i + 1) + ": unknown country code " + t); });
         if (o.products !== "ALL") o.products.forEach(function (c) { if (d.chapters.indexOf(c) < 0) errs.push("line " + (i + 1) + ": unknown HS chapter " + c); });
@@ -105,7 +106,7 @@
                   trade_lost: money(t.lost), sensitivity_used: ctx.elasticity(), countries_hit: hit.length },
         most_exposed: hit.slice(0, 10).map(function (k) { return countryRow(k, bc[k]); }),
         sectors_hit: chs.slice(0, 8).map(function (c) { return { chapter: c, name: ctx.chName(c), exports_hit: money(res.byChapter[c].hit), tariff_bill: money(res.byChapter[c].bill) }; }),
-        who_gains: gk.slice(0, 8).map(function (k) {
+        who_gains: gk.slice(0, 15).map(function (k) {
           var parts = Object.keys(g[k].chapters).sort(function (a, b) { return g[k].chapters[b] - g[k].chapters[a]; }).slice(0, 3);
           return { country: ctx.name(k), code: k, diversion_potential: money(g[k].total), share_of_its_us_exports: pct(g[k].share_of_us_exports),
                    top_products: parts.map(function (c) { return { chapter: c, name: ctx.chName(c), amount: money(g[k].chapters[c]) }; }) };
@@ -122,20 +123,20 @@
     var LINE_SCHEMA = {
       type: "object",
       properties: {
-        targets: { description: '"ALL" or a list of ISO3 country codes, e.g. ["CHN","VNM"]', anyOf: [{ type: "string", enum: ["ALL"] }, { type: "array", items: { type: "string" } }] },
-        products: { description: '"ALL" or a list of 2-digit HS chapters, e.g. ["87"]', anyOf: [{ type: "string", enum: ["ALL"] }, { type: "array", items: { type: "string" } }] },
+        targets: { type: "array", items: { type: "string" }, description: 'ISO3 country codes, e.g. ["CHN","VNM"]; ["ALL"] for every country' },
+        products: { type: "array", items: { type: "string" }, description: '2-digit HS chapters, e.g. ["87"]; ["ALL"] for all products' },
         rate: { type: "number", minimum: 0, description: "additional tariff in percent" },
         exclude_targets: { type: "array", items: { type: "string" } },
         exclude_products: { type: "array", items: { type: "string" } }
       },
       required: ["targets", "products", "rate"]
     };
-    var SCEN = { type: "object", properties: { lines: { type: "array", items: LINE_SCHEMA }, mode: { type: "string", enum: ["replace", "add"] } }, required: ["lines"] };
+    var SCEN = { properties: { lines: { type: "array", items: LINE_SCHEMA, description: "scenario lines" }, mode: { type: "string", enum: ["replace", "add"] } } };
     var defs = [
       { name: "run_scenario", description: "Run a US tariff scenario through the engine. Returns totals, most exposed countries, sectors hit, who gains, and any countries for which it is a tariff cut. Mode 'replace' (default) or 'add'.",
         inputSchema: { type: "object", properties: { lines: SCEN.properties.lines, mode: SCEN.properties.mode, year: { type: "integer", enum: ctx.years } }, required: ["lines"] },
         run: function (inp) { var v = validLines(inp.lines, inp.year); if (v.errs.length) return { error: v.errs.join("; ") }; return summary(run(v.lines, inp.mode, inp.year), inp.year); } },
-      { name: "country_detail", description: "One country under a scenario (or today's tariffs if lines is empty): imports, duties today and with the scenario, top product chapters, GDP, and which of today's tariff measures apply.",
+      { name: "country_detail", description: "One country under a scenario (or today's tariffs if lines is empty): imports, duties today and with the scenario, its who-gains diversion potential and rank, top product chapters, GDP, and which of today's tariff measures apply. Use it for any country not in run_scenario's lists.",
         inputSchema: { type: "object", properties: { code: { type: "string", description: "ISO3 code" }, lines: SCEN.properties.lines, mode: SCEN.properties.mode, year: { type: "integer", enum: ctx.years } }, required: ["code"] },
         run: function (inp) {
           var iso = String(inp.code || "").toUpperCase(), v = validLines(inp.lines || [], inp.year);
@@ -146,16 +147,24 @@
           var measures = ctx.current.lines.filter(function (L) { return D(inp.year).chapters.some(function (c) { return E.covers(L, iso, c); }); })
             .map(function (L) { return { measure: L.label, rate: L.rate + "%", legal_basis: L.basis }; });
           var row = countryRow(iso, r); row.gdp = r.gdp ? money(r.gdp) + " (" + r.gdp_year + ")" : "no GDP figure";
+          var gk = Object.keys(res.gains).sort(function (a, b) { return res.gains[b].total - res.gains[a].total; }), gi = gk.indexOf(iso);
+          row.who_gains = gi < 0 ? "not an untaxed supplier of any hit product in this scenario" : {
+            diversion_potential: money(res.gains[iso].total), share_of_its_us_exports: pct(res.gains[iso].share_of_us_exports), rank: gi + 1, of_suppliers: gk.length,
+            top_products: Object.keys(res.gains[iso].chapters).sort(function (a, b) { return res.gains[iso].chapters[b] - res.gains[iso].chapters[a]; }).slice(0, 3)
+              .map(function (c) { return { chapter: c, name: ctx.chName(c), amount: money(res.gains[iso].chapters[c]) }; }) };
           row.top_chapters = chs.map(function (c) { var x = r.chapters[c]; return { chapter: c, name: ctx.chName(c), us_imports: money(x.imports), duties_today: money(x.cur_bill), duties_with_scenario: money(x.sim_bill), avg_rate_today: pct(x.cur_bill / x.imports) }; });
           row.tariffs_in_force = measures; row.year = inp.year || ctx.defaultYear;
           return row;
         } },
       { name: "compare_scenarios", description: "Run two scenarios and return the differences (B minus A) overall and for the listed countries. Use this instead of doing arithmetic yourself.",
-        inputSchema: { type: "object", properties: { a: SCEN, b: SCEN, codes: { type: "array", items: { type: "string" } }, year: { type: "integer", enum: ctx.years } }, required: ["a", "b"] },
+        inputSchema: { type: "object", properties: { a_lines: SCEN.properties.lines, a_mode: SCEN.properties.mode, b_lines: SCEN.properties.lines, b_mode: SCEN.properties.mode,
+                       codes: { type: "array", items: { type: "string" } }, year: { type: "integer", enum: ctx.years } }, required: ["a_lines", "b_lines"] },
         run: function (inp) {
-          var va = validLines(inp.a && inp.a.lines, inp.year), vb = validLines(inp.b && inp.b.lines, inp.year);
+          var aL = inp.a_lines || (inp.a && inp.a.lines) || [], bL = inp.b_lines || (inp.b && inp.b.lines) || [];
+          var aM = inp.a_mode || (inp.a && inp.a.mode), bM = inp.b_mode || (inp.b && inp.b.mode);
+          var va = validLines(aL, inp.year), vb = validLines(bL, inp.year);
           if (va.errs.length || vb.errs.length) return { error: va.errs.concat(vb.errs).join("; ") };
-          var ra = run(va.lines, inp.a.mode, inp.year), rb = run(vb.lines, inp.b.mode, inp.year);
+          var ra = run(va.lines, aM, inp.year), rb = run(vb.lines, bM, inp.year);
           var codes = (inp.codes || []).map(function (s) { return String(s).toUpperCase(); }).filter(function (k) { return ra.byCountry[k]; });
           function d(x, y) { return money(y - x); }
           return { year: inp.year || ctx.defaultYear,
@@ -192,7 +201,7 @@
     return [
       "You convert a plain-English US tariff scenario into structured lines for a trade-exposure engine.",
       "Only the United States can be the imposer in this version. If part of the text has another country imposing tariffs (e.g. retaliation), list it under unsupported and do not turn it into a line.",
-      "Each line: targets (\"ALL\" or ISO3 codes), products (\"ALL\" or 2-digit HS chapters), rate (percent, 0 or higher), optional exclude_targets / exclude_products.",
+      "Each line: targets (\"ALL\" or a list of ISO3 codes), products (\"ALL\" or a list of 2-digit HS chapters), rate (percent, 0 or higher), optional exclude_targets / exclude_products.",
       "Use find_codes to look up codes you are unsure of. EU means all 27 member states. Narrow products map to their chapter (smartphones -> 85, almonds -> 08, EVs -> 87); say so in notes.",
       "Rates must come from the user's text. For relative changes (\"double\", \"halve\", \"raise by 10 points\") call current_rate and set derived_from to that tool's avg_rate_today_number and factor/add accordingly.",
       "Never invent a rate. If no rate can be determined, leave the line out and explain in unsupported.",
@@ -210,7 +219,7 @@
       "3. 'Who gains' is a frictionless benchmark: untaxed suppliers' current market share times the value hit. Real switching is slower; non-tariff barriers such as quality standards, certification and trade finance limit it (the ECO 359 survey behind this project found India's 2018-20 gains fell short of such benchmarks for that reason).",
       "4. Today's tariffs come from a dated hand-built table and stack in layers (Section 232 product tariffs; country-wide Section 301 duties). In replace mode, a country-wide line replaces the country-wide layers and keeps Section 232; a line naming products replaces everything on them.",
       "5. Share of GDP overstates the hit, because exports are gross sales and GDP is value added.",
-      "6. Plain English, at most 150 words, no tables. Name the tool results you relied on in passing (e.g. 'the engine shows').",
+      "6. Plain English, at most 150 words, no tables, no markdown headings. Name the tool results you relied on in passing (e.g. 'the engine shows').",
       "The user's current scenario (" + (mode || "replace") + " mode): " + JSON.stringify(scenarioLines || []) + ". Use it when they say 'this scenario'.",
       "Data years available: " + ctx.years.join(", ") + " (default " + ctx.defaultYear + ").",
       "HS chapters: " + chapterList(ctx)
@@ -353,7 +362,16 @@
     });
   }
 
-  var api = { extractNumbers: extractNumbers, checkNumbers: checkNumbers, makeTools: makeTools, artifactProvider: artifactProvider,
+  // nesting depth of a JSON schema, counted the way the platform does: each nested schema adds one level
+  function schemaDepth(x) {
+    if (!x || typeof x !== "object") return 0;
+    var kids = [];
+    if (x.properties) Object.keys(x.properties).forEach(function (k) { kids.push(x.properties[k]); });
+    if (x.items) kids.push(x.items);
+    ["anyOf", "oneOf", "allOf"].forEach(function (k) { if (x[k]) kids = kids.concat(x[k]); });
+    return 1 + kids.reduce(function (m, k) { return Math.max(m, schemaDepth(k)); }, 0);
+  }
+  var api = { schemaDepth: schemaDepth, extractNumbers: extractNumbers, checkNumbers: checkNumbers, makeTools: makeTools, artifactProvider: artifactProvider,
               httpProvider: httpProvider, aiParse: aiParse, analyst: analyst, rateGate: rateGate, detect: detect,
               parserSystem: parserSystem, analystSystem: analystSystem, parseJSON: parseJSON, money: money, pct: pct };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

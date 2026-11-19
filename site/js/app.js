@@ -494,6 +494,8 @@
       renderLines(); update();
     }).catch(function (e) { runRuleText(t, [aiError(e) + " Used the rule-based reader instead."]); });
   }
+  // escape first, then allow **bold** only
+  function mdLite(t) { return escH(t).replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>").replace(/^#+\s*/gm, ""); }
   function bubble(cls, html) { var b = el("div", { "class": "bubble " + cls }, html); $("chat-log").appendChild(b); b.scrollIntoView({ block: "nearest" }); return b; }
   function toolDetails(log) {
     if (!log || !log.length) return "";
@@ -510,7 +512,7 @@
     AI.analyst(S.ai.provider, aiCtx(), q, S.ai.history.slice(-6), scenarioLines(), S.mode).then(function (r) {
       wait.remove();
       if (r.ok) {
-        bubble("ai", escH(r.text) + toolDetails(r.toolLog));
+        bubble("ai", mdLite(r.text) + toolDetails(r.toolLog));
         S.ai.history.push({ role: "user", content: q }, { role: "assistant", content: r.text });
       } else {
         bubble("blocked", "<b>Answer withheld.</b> It contained numbers the engine did not return (" + escH(r.bad.join(", ")) + "), even after one retry. The engine results it used are below." + toolDetails(r.toolLog));

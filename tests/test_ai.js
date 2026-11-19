@@ -30,6 +30,11 @@ const check = (n, c, x = "") => { console.log((c ? "PASS " : "FAIL ") + n + (x ?
   check("tool country_detail: China today matches engine", cd.avg_rate_today === AI.pct(E.compute(data[2025], gdp["2025"], current.lines, { lines: [] }, 0.76).byCountry.CHN.cur_bill / eng.byCountry.CHN.imports), cd.avg_rate_today);
   const cmp = tool("compare_scenarios").run({ a: { lines: [] }, b: { lines: [{ targets: ["CHN"], products: "ALL", rate: 25 }] }, codes: ["CHN"] });
   check("tool compare_scenarios: difference computed by engine", cmp.countries[0].duties_difference.startsWith("-"), cmp.countries[0].duties_difference);
+  const depths = T.defs.map((d) => [d.name, AI.schemaDepth(d.inputSchema)]);
+  check("tool schemas nest at most 5 levels (platform rejects > 6)", depths.every(([, n]) => n <= 5), JSON.stringify(depths));
+  check("tool run_scenario: [\"ALL\"] means all", tool("run_scenario").run({ lines: [{ targets: ["ALL"], products: ["87"], rate: 25 }] }).totals.countries_hit > 100);
+  const th = tool("country_detail").run({ code: "THA", lines });
+  check("tool country_detail: who-gains rank for any country (Thailand)", th.who_gains.diversion_potential === AI.money(eng.gains.THA.total) && th.who_gains.rank > 0, JSON.stringify(th.who_gains).slice(0, 90));
   check("tool find_codes", tool("find_codes").run({ query: "viet" }).matches.some((m) => m.code === "VNM"));
   const cr = tool("current_rate").run({ targets: ["CHN"], products: ["87"] });
   check("tool current_rate: China vehicles", cr.avg_rate_today_number > 40, cr.avg_rate_today);
@@ -61,7 +66,7 @@ const check = (n, c, x = "") => { console.log((c ? "PASS " : "FAIL ") + n + (x ?
   r = await AI.analyst(prov, ctx, "How big?", [], lines, "replace");
   check("analyst: corrected on retry is shown", r.ok && r.retried, r.text);
 
-  const arith = [() => ({ text: "", tool_calls: [{ id: "a", name: "compare_scenarios", input: { a: { lines: [] }, b: { lines: [{ targets: ["CHN"], products: "ALL", rate: 25 }] }, codes: ["CHN"] } }] }),
+  const arith = [() => ({ text: "", tool_calls: [{ id: "a", name: "compare_scenarios", input: { a_lines: [], b_lines: [{ targets: ["CHN"], products: ["ALL"], rate: 25 }], codes: ["CHN"] } }] }),
                  (b) => ({ text: `China's duties change by ${lastTool(b).countries[0].duties_difference}.` })];
   prov = AI.httpProvider("https://proxy/v1/agent", fakeModel(arith));
   r = await AI.analyst(prov, ctx, "Compare", [], lines, "replace");
