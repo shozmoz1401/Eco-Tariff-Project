@@ -118,6 +118,15 @@
     var r = P.parse(t, D().names);
     var box = $("parse-msgs"); box.innerHTML = "";
     (prefix || []).forEach(function (w) { box.appendChild(el("div", { "class": "msg warn" }, escH(w))); });
+    // relative changes ("doubles"): the engine computes the new rate from today's modelled rate
+    r.lines = r.lines.filter(function (L) {
+      if (!L.relative) return true;
+      var rr = AI.resolveRelative(aiCtx(), L);
+      if (rr.error) { r.warnings.push("Could not work out the new rate: " + rr.error + "."); return false; }
+      r.notes.push("New rate " + rr.rate + "% = " + rr.how + " average on those products (from the tariff table). Check it.");
+      L.targets = rr.line.targets; L.products = rr.line.products; L.rate = rr.rate; delete L.relative; return true;
+    });
+    if (!r.lines.length) r.warnings.push("Nothing could be read from that text, so the lines below are unchanged.");
     if (r.lines.length) S.lines = r.lines.map(function (l) { return { targets: l.targets, products: l.products, rate: l.rate, exclude_targets: l.exclude_targets, exclude_products: l.exclude_products }; });
     r.warnings.forEach(function (w) { box.appendChild(el("div", { "class": "msg warn" }, escH(w))); });
     r.notes.forEach(function (w) { box.appendChild(el("div", { "class": "msg" }, escH(w))); });
@@ -465,7 +474,8 @@
   // ---------- AI (stage 2) ----------
   function aiCtx() {
     return { data: function (y) { return S.data[y]; }, gdp: function (y) { return S.gdp[String(y)]; }, current: S.current,
-             years: S.meta.years, defaultYear: S.year, name: name, chName: chName, elasticity: function () { return S.elasticity; } };
+             years: S.meta.years, defaultYear: S.year, name: name, chName: chName, elasticity: function () { return S.elasticity; },
+             scenario: function () { return { lines: scenarioLines(), mode: S.mode }; } };
   }
   var CHAT_EXAMPLES = ["Who is most exposed in this scenario, and why?", "Why does Vietnam gain more than Thailand?",
                        "Compare this scenario with 25% on China only.", "What does China pay today, and what changes?"];
@@ -500,7 +510,7 @@
     var box = $("parse-msgs"); box.innerHTML = '<div class="msg">Reading the scenario with AI…</div>';
     try { gate(); } catch (e) { return runRuleText(t, [e.message + " Used the rule-based reader instead."]); }
     AI.aiParse(S.ai.provider, aiCtx(), t).then(function (r) {
-      if (!r.lines.length) throw new Error("AI found no lines it could use");
+      if (!r.lines.length) return runRuleText(t, ["The AI reader found no usable lines" + (r.unsupported.concat(r.warnings).length ? ": " + r.unsupported.concat(r.warnings).join(" ") : ".") + " Tried the rule-based reader instead."]);
       S.lines = r.lines;
       box.innerHTML = "";
       box.appendChild(el("div", { "class": "msg" }, '<span class="badge">AI</span>Parsed into ' + r.lines.length + " line" + (r.lines.length > 1 ? "s" : "") + " below. Check them and edit if needed."));
@@ -515,7 +525,7 @@
   // the engine figures the answer used, so a reader can see what each number is
   function usedList(used) {
     if (!used || !used.length) return "";
-    var seen = {}, items = used.filter(function (u) { if (seen[u.raw]) return false; seen[u.raw] = 1; return true; });
+    var seen = {}, items = used.filter(function (u) { if (seen[u.raw] || !/[$%]|pts/.test(u.raw)) return false; seen[u.raw] = 1; return true; });
     return '<div class="used"><span class="badge">Engine figures</span>' + items.map(function (u) {
       return "<span class=\"fig\"><b>" + escH(u.raw) + "</b> " + escH(u.source.replace(/_/g, " ")) + "</span>"; }).join("") + "</div>";
   }
@@ -600,7 +610,7 @@
       "<li><b>Not modelled:</b><ul>" + cur.not_modelled.map(function (n) { return "<li>" + escH(n[0]) + " — " + escH(n[1]) + "</li>"; }).join("") + "</ul></li>",
       "<li>" + escH(cur.checked) + "</li></ul>",
       "<h3>AI features (stage 2)</h3>",
-      "<p><b>What the number check can and cannot do.</b> It confirms that each figure in an answer exists in the engine's output for that conversation, as the same kind of figure (money, percent or plain number), at the precision written, with a matching sign or direction (a figure the engine returned as negative cannot be described as a rise), and, when the engine tied it to a country, next to that country rather than another. It blocks figures written in words, and multiples or fractions (double, half, 3 times) unless you used them. It cannot judge whether the sentence around a correct figure is right. Under every answer the page therefore lists the engine figures used and the field each came from, so you can check them.</p>",
+      "<p><b>What the number check can and cannot do.</b> It confirms that each figure in an answer exists in the engine's output for that conversation, as the same kind of figure (money, percent or plain number), at the precision written, with a matching sign or direction (a figure the engine returned as negative cannot be described as a rise), and, when the engine tied it to a country, next to that country rather than another. It blocks figures written in words; multiples, fractions and ratios (double, half, 3 times, one in five) unless you used them; vague sizes (tens of billions); and any figure placed next to a forecast the engine does not make (stock markets, GDP growth, inflation, prices, jobs). Full-width digits are normalised first. When a sentence says only \u201cit\u201d or \u201cthey\u201d, the figure is checked against the last country named before it. It cannot judge whether the sentence around a correct figure is right, nor catch every way a sentence can mislead (for example a correct figure under a wrong description). Under every answer the page therefore lists the engine figures used and the field each came from, so you can check them. When you ask for a relative change such as \u201cdouble\u201d, the AI only reports the factor; the page computes the new rate from today\u2019s modelled rate and tells you so. Under every answer the page therefore lists the engine figures used and the field each came from, so you can check them.</p>",
       "<p><b>What the AI does:</b> (1) reads a typed scenario into the same editable lines the menus produce, and you see and can correct them before anything is calculated; (2) answers questions in the analyst panel by calling the engine as a tool (run a scenario, inspect a country, compare two scenarios, look up codes, read today's rates). <b>What it never does:</b> produce a number. Every figure in an analyst answer is checked against the engine's own outputs for that question. If any figure is not there, at the precision shown, the answer is retried once and otherwise withheld, and the engine results are shown instead. A parsed rate must appear in your text, or be derived from today's modelled rate (for “double”), and the page tells you when it was derived.</p>",
       "<p><b>Where the AI runs:</b> on claude.ai, the page asks Claude through the artifact platform, with no API key and no server; the first use asks your permission, and it counts against the viewer's own Claude usage. That means it only works for viewers signed in to Claude; anyone else gets the page with AI switched off (all figures still work). A public copy can instead call a small Cloudflare Worker (in the repo's <code>worker/</code> folder) that holds the API key as a secret and forwards to the Anthropic API or any OpenAI-compatible endpoint. The provider sits behind one function, so swapping it changes no other code. Without either, AI is simply off and the rule-based reader is used.</p>",
       "<p><b>Spend controls:</b> each browser is limited to " + ((window.TES_CONFIG || {}).aiCallsPerHour || 20) + " AI calls an hour, the Worker limits requests per IP address and in total, and the API key should have a monthly spending limit set in the Claude Console.</p>",

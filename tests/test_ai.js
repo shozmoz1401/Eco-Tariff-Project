@@ -73,6 +73,16 @@ const check = (n, c, x = "") => { console.log((c ? "PASS " : "FAIL ") + n + (x ?
   ];
   const vdEarly = realLog[3].output;
   mustBlock[mustBlock.length - 1] = `Thailand captures ${vdEarly.who_gains.share_of_its_us_exports} of its US exports.`;
+  // HANDOFF_2 task B: five more made-up answers that used to pass
+  mustBlock.push(
+    "Exports fall \uFF14\uFF15%.",
+    "One in five Chinese exporters would close.",
+    "Tens of billions of dollars would move to Mexico.",
+    `Thailand is the big winner. It gains ${vdEarly.who_gains.diversion_potential}.`,
+    "Stock markets in Vietnam would rise 21.0%.",
+    "3 out of 4 suppliers lose.",
+    `GDP growth in Vietnam rises by ${vdEarly.who_gains.share_of_its_us_exports}.`
+  );
   for (const t of mustBlock) { const r = AI.checkNumbers(t, allowedReal, o); check(`review case blocked: "${t}"`, !r.ok, JSON.stringify(r.problems.map((p) => p.reason))); }
   const vd = realLog[vdIdx].output, td = realLog[tdIdx].output, mx = realLog[0].output.most_exposed.find((c) => c.code === "MEX");
   const mustPass = [
@@ -84,12 +94,29 @@ const check = (n, c, x = "") => { console.log((c ? "PASS " : "FAIL ") + n + (x ?
     `Mexico loses ${mx.trade_lost} of trade and is most exposed at ${mx.share_of_gdp} of GDP.`,
     `Your scenario hits ${realLog[2].output.overall.exports_hit_a}; China-only hits ${realLog[2].output.overall.exports_hit_b}, a difference of ${realLog[2].output.overall.exports_hit_difference}.`,
     "The top 5 countries and 3 sectors carry most of it.",
+    `Vietnam ranks ${vd.who_gains.rank} among suppliers. It gains ${vd.who_gains.diversion_potential} in this best-case benchmark.`,
+    "The engine does not forecast stock markets, prices or jobs.",
   ];
   for (const t of mustPass) { const r = AI.checkNumbers(t, allowedReal, o); check(`honest sentence passes: "${t.slice(0, 70)}"`, r.ok, JSON.stringify(r.problems)); }
   const usedShare = AI.checkNumbers(mustPass[2], allowedReal, o).used;
   check("figure is traced to the country named next to it", usedShare.length === 2 && usedShare[1].source.includes("Thailand"), usedShare.map((u) => u.source).join(" | "));
   const usedR = AI.checkNumbers(mustPass[0], allowedReal, o).used;
   check("figures used are traced to engine fields", usedR.length >= 2 && usedR[0].source.includes("who_gains"), usedR[0] && usedR[0].source);
+
+  // ---- HANDOFF_2 task A fixes
+  const scenCtx = Object.assign({}, ctx, { scenario: () => ({ lines: [{ targets: ["CHN"], products: ["ALL"], rate: 25 }], mode: "replace" }) });
+  const T2 = AI.makeTools(scenCtx), cdDefault = T2.defs.find((d) => d.name === "country_detail").run({ code: "CHN" });
+  const cdToday = T2.defs.find((d) => d.name === "country_detail").run({ code: "CHN", lines: [] });
+  check("tools default to the user's scenario when lines are omitted", cdDefault.scenario_used === "the user's current scenario" && cdDefault.duties_with_scenario !== cdToday.duties_with_scenario, cdDefault.duties_with_scenario + " vs " + cdToday.duties_with_scenario);
+  check("lines [] means today's tariffs only, and says so", /today's tariffs only/.test(cdToday.scenario_used));
+  const crCh87 = tool("current_rate").run({ targets: ["CHN"], products: ["87"] }).avg_rate_today_number;
+  const rel = AI.resolveRelative(ctx, { targets: ["CHN"], products: ["87"], relative: { factor: 2 } });
+  check("'doubles' is computed by the engine: 2 x today's modelled rate", Math.abs(rel.rate - Math.round(crCh87 * 2 * 10) / 10) < 0.11, rel.rate + " vs 2x" + crCh87);
+  const relPts = AI.resolveRelative(ctx, { targets: ["CHN"], products: ["87"], relative: { add_points: 10 } });
+  check("'+10 points' is computed by the engine", Math.abs(relPts.rate - (crCh87 + 10)) < 0.11, relPts.rate);
+  const Pz = require("../site/js/parser.js"), prz = Pz.parse("what if the US doubles tariffs on Chinese EVs", {});
+  check("rule-based reader: doubles on Chinese EVs -> China, ch 87, factor 2", prz.lines.length === 1 && prz.lines[0].targets[0] === "CHN" && prz.lines[0].products[0] === "87" && prz.lines[0].relative.factor === 2, JSON.stringify(prz.lines));
+  check("factor words read from text", AI.factorsInText("halve tariffs").indexOf(0.5) >= 0 && AI.factorsInText("25% on autos").length === 0);
 
   // ---- fake model behind the HTTP provider (exercises the real tool loop)
   function fakeModel(script) {
@@ -149,8 +176,12 @@ const check = (n, c, x = "") => { console.log((c ? "PASS " : "FAIL ") + n + (x ?
   pr = await AI.aiParse(AI.httpProvider("x", parseScript({ lines: [{ targets: ["IND"], products: "ALL", rate: 17 }] })), ctx, "tariffs on India");
   check("ai parse: invented rate dropped", pr.lines.length === 0 && pr.warnings.length === 1);
   const doubled = +(2 * cr.avg_rate_today_number).toFixed(1);
-  pr = await AI.aiParse(AI.httpProvider("x", parseScript({ lines: [{ targets: ["CHN"], products: ["87"], rate: doubled, derived_from: cr.avg_rate_today_number }] }, true)), ctx, "double tariffs on Chinese cars");
-  check("ai parse: 'double' derived from current_rate accepted and flagged", pr.lines.length === 1 && pr.warnings.some((w) => /derived/.test(w)), `${pr.lines[0] && pr.lines[0].rate}%`);
+  pr = await AI.aiParse(AI.httpProvider("x", parseScript({ lines: [{ targets: ["CHN"], products: ["87"], rate: null, relative: { factor: 2 } }] })), ctx, "double tariffs on Chinese cars");
+  check("ai parse: 'double' -> page computes 2 x today's rate and flags it", pr.lines.length === 1 && Math.abs(pr.lines[0].rate - doubled) < 0.11 && pr.warnings.some((w) => /today's modelled/.test(w)), `${pr.lines[0] && pr.lines[0].rate}% vs ${doubled}%`);
+  pr = await AI.aiParse(AI.httpProvider("x", parseScript({ lines: [{ targets: ["CHN"], products: ["87"], rate: null, relative: { factor: 3 } }] })), ctx, "double tariffs on Chinese cars");
+  check("ai parse: a factor the text does not state is dropped", pr.lines.length === 0);
+  pr = await AI.aiParse(AI.httpProvider("x", parseScript({ lines: [{ targets: ["CHN"], products: ["87"], rate: doubled }] })), ctx, "double tariffs on Chinese cars");
+  check("ai parse: a rate the model computed itself is dropped", pr.lines.length === 0);
   let threw = false;
   try { await AI.aiParse(AI.httpProvider("x", parseScript({ lines: [{ targets: ["ZZZ"], products: "ALL", rate: 10 }] })), ctx, "10% on Zed"); } catch (e) { threw = true; }
   check("ai parse: unknown country code rejected (falls back to rules)", threw);

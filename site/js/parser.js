@@ -124,7 +124,7 @@
     while ((m = zeroRe.exec(text))) rates.push({ s: m.index, e: m.index + m[0].length, rate: 0, zero: true });
     rates.sort(function (a, b) { return a.s - b.s; });
 
-    if (/doubl|tripl|halv|raise[sd]? .* by/.test(text)) warnings.push("Relative changes such as \"doubles\" need today's rate per product; the simple parser can't do that. Enter the new rate as a percentage.");
+    if (/raise[sd]? .* by \d/.test(text) && !/%/.test(text)) warnings.push("\"Raise by N points\" is not supported by the simple reader; enter the new rate as a percentage.");
     // foreign-imposer zones: "<country> retaliates/imposes ..." up to the next US mention
     var zones = [];
     ms.forEach(function (x, i) {
@@ -144,6 +144,18 @@
     }
 
     if (!rates.length) {
+      // relative change ("doubles tariffs on Chinese EVs"): the page computes the rate from today's modelled rate
+      var fm = text.match(/\b(doubl\w*|twice|tripl\w*|quadrupl\w*|halv\w*|half)\b/);
+      if (fm) {
+        var factor = /^doubl|^twice/.test(fm[1]) ? 2 : /^tripl/.test(fm[1]) ? 3 : /^quadrupl/.test(fm[1]) ? 4 : 0.5;
+        var tg = [], pr = [], every = false;
+        ms.forEach(function (x) {
+          if (x.ent.type === "country") tg.push.apply(tg, x.ent.iso); else if (x.ent.type === "everyone") every = true;
+          else if (x.ent.type === "sector") { pr.push.apply(pr, x.ent.ch); if (x.ent.note && notes.indexOf(x.ent.note) < 0) notes.push(x.ent.note); }
+        });
+        warnings.length = 0;
+        return { lines: [{ targets: tg.length && !every ? uniq(tg) : "ALL", products: pr.length ? uniq(pr) : "ALL", rate: null, relative: { factor: factor } }], warnings: warnings, notes: notes };
+      }
       warnings.push("No tariff rate found. Include a number with %, e.g. \"25% on autos from Mexico\".");
       return { lines: [], warnings: warnings, notes: notes };
     }
